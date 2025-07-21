@@ -7,8 +7,14 @@ def main():
     try:
         db_pass = getpass.getpass(prompt="Inserisci la password del database: ")
         db = DBLocal(db_name, db_pass)
-        for i in range(1000):
-            db.add_group2([""], f"{i}")
+        db.add_group([""], "a")
+        db.add_entry(["a"], "b", "c", "d")
+        db.delete_entry(["a", "b"])
+        try:
+            db.delete_entry(["a", "b"])
+        except:
+            print("b")
+
         db.save_changes()
     except Exception as error:
         print('ERROR', error)

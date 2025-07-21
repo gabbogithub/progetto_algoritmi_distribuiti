@@ -19,7 +19,7 @@ class DBLocal():
         if group is None:
             raise KeyError("The group for the entry doesn't exist!")
         
-        if self._kp_db.find_entries(group=group, title=title) is not None:
+        if self._kp_db.find_entries(group=group, title=title, first=True) is not None:
             raise KeyError("The entry under the specified group, with the specified title already exists!")
         
         self._kp_db.add_entry(group, title, username, passwd)
