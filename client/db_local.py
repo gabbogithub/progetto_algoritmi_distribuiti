@@ -7,8 +7,10 @@ class DBLocal():
         self._kp_db = PyKeePass(path, passwd)
 
     @classmethod
-    def create_db(cls, path: str, passwd: str) -> Self:
-        create_database(path, passwd)
+    def create_db(cls, path: str, passwd: str, name: str) -> Self:
+        db = create_database(path, passwd)
+        db.database_name = name
+        db.save()
         return cls(path, passwd)
 
     def reset_db(self, path: str, passwd: str) -> None:
@@ -51,6 +53,12 @@ class DBLocal():
     
     def change_name(self, new_name: str) -> None:
         self._kp_db.database_name = new_name
+
+    def get_name(self) -> str:
+        return self._kp_db.database_name
+
+    def get_filename(self) -> str:
+        return self._kp_db.filename
 
     def get_entries(self):
         return self._kp_db.entries
