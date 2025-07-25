@@ -72,11 +72,11 @@ class ListValidator(Validator):
 
 def database_selection(ctx: ContextApp):
     local_choices = [
-        f"[Local {i + 1}] {db.get_name()} ({db.get_filename()})"
+        f"[Local {i + 1}] {db.get_name()}"
         for i, db in enumerate(ctx.local_dbs)
     ]
     remote_choices = [
-        f"[Remote {i + 1}] {db.get_name()} ({db.get_filename()})"
+        f"[Remote {i + 1}] {db.get_name()}"
         for i, db in enumerate(ctx.remote_dbs)
     ]
 
@@ -108,18 +108,18 @@ def create_database(ctx: ContextApp) -> None:
             {
                 "type": "path",
                 "name": "db_path",
-                "message": "Insert the database file name",
+                "message": "Insert the database file name:",
                 "validate": NameValidator
                 },
             {
                 "type": "text",
                 "name": "db_name",
-                "message": "Insert the database name",
+                "message": "Insert the database name:",
                 },
             {
                 "type": "password",
                 "name": "db_passwd",
-                "message": "Insert the database password",
+                "message": "Insert the database password:",
                 },
             ]
     results = prompt(questions)
@@ -133,13 +133,13 @@ def open_database(ctx: ContextApp) -> None:
             {
                 "type": "path",
                 "name": "db_path",
-                "message": "Insert the database path",
+                "message": "Insert the database path:",
                 "validate": ListValidator(ctx),
                 },
             {
                 "type": "password",
                 "name": "db_passwd",
-                "message": "Insert the database password",
+                "message": "Insert the database password:",
                 },
             ]
     results = prompt(questions)
@@ -169,53 +169,169 @@ def list_databases(ctx: ContextApp) -> None:
                                     remote_lines, 
                                     fillvalue=" " * filling):
         print(f"{line1}   {line2}")
+
+def list_entries(ctx: ContextApp) -> None:
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+
+    table = PrettyTable()
+    table.set_style(TableStyle.SINGLE_BORDER)
+    table.field_names = ["Title", "Username", "Password", "Path"]
+    table.title = "Database entries"
+
+    if db_type == "l":
+        table.add_rows([[entry.title, entry.username, entry.password, "/".join(entry.path)] for entry in ctx.local_dbs[idx].get_entries()])
+    elif db_type == "r":
+        table.add_rows([[entry.title, entry.username, entry.password, "/".join(entry.path)] for entry in ctx.remote_dbs[idx].get_entries()])
+
+    print(table)
+
+def list_groups(ctx: ContextApp) -> None:
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+
+    table = PrettyTable()
+    table.set_style(TableStyle.SINGLE_BORDER)
+    table.field_names = ["Name", "Path"]
+    table.title = "Database groups"
+
+    if db_type == "l":
+        table.add_rows([[group.name, "/".join(group.path)] for group in ctx.local_dbs[idx].get_groups()])
+    elif db_type == "r":
+        table.add_rows([[group.name, "/".join(group.path)] for group in ctx.remote_dbs[idx].get_groups()])
+
+    print(table)
     
 def add_group(ctx: ContextApp) -> None:
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
     questions = [
             {
-                "type": "path",
-                "name": "db_path",
-                "message": "Insert the database path",
+                "type": "text",
+                "name": "parent_group",
+                "message": "Insert the parent group path (separated by \"/\")\n  For the root group leave an empty input:",
                 },
             {
-                "type": "password",
-                "name": "db_passwd",
-                "message": "Insert the database password",
+                "type": "text",
+                "name": "group_name",
+                "message": "Insert the name of the new group:",
                 },  
             ]
     results = prompt(questions)
-    if results:
-        db = DBLocal(results["db_path"], results["db_passwd"])
-        questions = [
-                {
-                    "type": "text",
-                    "name": "parent_group",
-                    "message": "Insert the parent group",
-                    },
-                {
-                    "type": "text",
-                    "name": "group_name",
-                    "message": "Insert the name of the new group",
-                    },  
-                ]
-        results = prompt(questions)
-        if results:
-            try:
-                db.add_group(results["parent_group"].split("/"), results["group_name"])
-            except ValueError:
-                questionary.print("The inserted names were not correct!")
+    if not results:
+        return
+
+    if db_type == "l":
+        try:
+            ctx.local_dbs[idx].add_group(results["parent_group"].split("/"), results["group_name"])
+        except ValueError as e:
+            print(e)
+
+    if db_type == "r":
+        # TODO add logic for remote db
+        pass
 
 def add_entry(ctx: ContextApp) -> None:
-    pass
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+    questions = [
+            {
+                "type": "text",
+                "name": "parent_group",
+                "message": "Insert the parent group path (separated by \"/\")\n  For the root group leave an empty input:",
+                },
+            {
+                "type": "text",
+                "name": "entry_title",
+                "message": "Insert the title for the new entry:",
+                },
+            {
+                "type": "text",
+                "name": "entry_username",
+                "message": "Insert the username for the new entry:",
+                }, 
+            {
+                "type": "text",
+                "name": "entry_password",
+                "message": "Insert the password for the new entry:",
+                },  
+            ]
+    results = prompt(questions)
+    if not results:
+        return
+
+    if db_type == "l":
+        try:
+            ctx.local_dbs[idx].add_entry(results["parent_group"].split("/"), results["entry_title"], results["entry_username"], results["entry_password"])
+        except KeyError as e:
+            print(e)
+
+    if db_type == "r":
+        # TODO add logic for remote db
+        pass
 
 def delete_group(ctx: ContextApp) -> None:
-    pass
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+    questions = [
+            {
+                "type": "text",
+                "name": "group_path",
+                "message": "Insert the group path (separated by \"/\"):",
+                },
+            ]
+    results = prompt(questions)
+    if not results:
+        return
+
+    if db_type == "l":
+        try:
+            ctx.local_dbs[idx].delete_group(results["group_path"].split("/"))
+        except KeyError as e:
+            print(e)
+
+    if db_type == "r":
+        # TODO add logic for remote db
+        pass
 
 def delete_entry(ctx: ContextApp) -> None:
-    pass
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+    questions = [
+            {
+                "type": "text",
+                "name": "entry_path",
+                "message": "Insert the entry path (separated by \"/\"):",
+                },
+            ]
+    results = prompt(questions)
+    if not results:
+        return
+
+    if db_type == "l":
+        try:
+            ctx.local_dbs[idx].delete_entry(results["entry_path"].split("/"))
+        except KeyError as e:
+            print(e)
+
+    if db_type == "r":
+        # TODO add logic for remote db
+        pass
 
 def save_changes(ctx: ContextApp) -> None:
-    pass
+    idx, db_type = database_selection(ctx)
+    if not db_type:
+        return
+    if db_type == "l":
+        ctx.local_dbs[idx].save_changes()
+    elif db_type == "r":
+        ctx.remote_dbs[idx].save_changes()
 
 def close_local_db(ctx: ContextApp):
     idx, db_type = database_selection(ctx)
@@ -223,7 +339,7 @@ def close_local_db(ctx: ContextApp):
         db_to_close = ctx.local_dbs.pop(idx)
         print(f"Closed local database: {db_to_close.get_name()}")
 
-    else:
+    elif db_type == "r":
         # TODO add logic to handle the transition from online to offline database
         db_to_close = ctx.remote_dbs.pop(idx)
         print(f"Closed remote database: {db_to_close.get_name()}")

@@ -30,7 +30,7 @@ class DBLocal():
         parent = self._kp_db.find_groups(path=parent_group, first=True)
 
         if parent is None:
-            raise ValueError(f"The parent group does not exist!")
+            raise ValueError("The parent group does not exist!")
 
         if self._kp_db.find_groups(group=parent, name=group_name, first=True, recursive=False) is not None:
             raise ValueError("The group is already present in the parent group!")
@@ -62,6 +62,9 @@ class DBLocal():
 
     def get_entries(self):
         return self._kp_db.entries
+
+    def get_groups(self):
+        return self._kp_db.groups
     
     def save_changes(self) -> None:
         self._kp_db.save()

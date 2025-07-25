@@ -13,6 +13,8 @@ class CLIApp():
                     "Create database": actions.create_database,
                     "Open local database": actions.open_database,
                     "List databases": actions.list_databases,
+                    "List entries": actions.list_entries,
+                    "List groups": actions.list_groups,
                     "Add group": actions.add_group,
                     "Add entry": actions.add_entry,
                     "Delete group": actions.delete_group,
