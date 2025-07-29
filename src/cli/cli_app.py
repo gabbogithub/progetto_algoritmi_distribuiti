@@ -1,13 +1,13 @@
 import questionary
 from sys import exit
 from collections import defaultdict
-from .context import ContextApp
+from context.context import ContextApp
 from . import actions
 
 class CLIApp():
 
-    def __init__(self):
-        self.ctx = ContextApp()
+    def __init__(self, ctx: ContextApp):
+        self.ctx = ctx
         self.menu_actions = defaultdict(lambda: self._forced_exit)
         self.menu_actions.update({
                     "Create database": actions.create_database,

@@ -1,12 +1,12 @@
-from pykeepass import PyKeePass, create_database
 from pykeepass.exceptions import CredentialsError
 import questionary
-from questionary import prompt, ValidationError, Validator
+from questionary import prompt, ValidationError, Validator, Choice
 from prettytable import PrettyTable, TableStyle
 from pathlib import Path
 from itertools import zip_longest
 from database.db_local import DBLocal
-from .context import ContextApp
+from database.db_interface import DBInterface
+from context.context import ContextApp
 
 class NameValidator(Validator):
     def validate(self, document):
@@ -58,7 +58,7 @@ class ListValidator(Validator):
                 cursor_position=len(document.text),
             )
 
-        for open_db in self.ctx.local_dbs:
+        for _, open_db in self.ctx.get_indexes_databases():
             try:
                 open_db_path = Path(open_db.get_filename()).expanduser().resolve()
                 if candidate_db_path.samefile(open_db_path):
@@ -70,38 +70,36 @@ class ListValidator(Validator):
                 # This can happen if an open DB was moved/deleted.
                 continue
 
-def database_selection(ctx: ContextApp):
-    local_choices = [
-        f"[Local {i + 1}] {db.get_name()}"
-        for i, db in enumerate(ctx.local_dbs)
-    ]
-    remote_choices = [
-        f"[Remote {i + 1}] {db.get_name()}"
-        for i, db in enumerate(ctx.remote_dbs)
-    ]
+def database_selection(ctx: ContextApp) -> int:
+    """Prompts the user to select a database and returns the associated index"""
+    choices = {}
+    for db_id, db in ctx.get_indexes_databases():
+        db_type_str = "Local" if isinstance(db, DBLocal) else "Remote"
+        display_name = f"[{db_type_str}] {db.get_name()} ({db_id})"
+        choices[display_name] = db_id
 
-    all_choices = local_choices + remote_choices
-
-    if not all_choices:
+    if not choices:
         print("There are no open databases!")
-        return (None, None)
+        return -1
+    
+    while True:
+        selected_display_name = questionary.autocomplete(
+            "Start typing to select the database:",
+            choices=choices.keys(),
+            ignore_case=True,
+            match_middle=True,
+        ).ask()
 
-    selected = questionary.autocomplete(
-        "Start typing to select the database:",
-        choices=all_choices,
-        validate=lambda val: val in all_choices or "Please select a valid option",
-        ignore_case=True,
-        match_middle=True,
-    ).ask()
+        if selected_display_name is None:
+        # User cancelled the operation
+            return -1
+        
+        selected_id = choices[selected_display_name]
 
-    if selected is None:
-        return (None, None)
+        confirmation = questionary.confirm(f"You selected '{selected_display_name}'. Is this correct?").ask()
 
-    confirmation = questionary.confirm("Did you select the right database?").ask()
-    if not confirmation:
-        return (None, None)
-
-    return (local_choices.index(selected), "l") if selected in local_choices else (remote_choices.index(selected), "r")
+        if confirmation:
+            return selected_id
 
 def create_database(ctx: ContextApp) -> None:
     questions = [
@@ -126,7 +124,8 @@ def create_database(ctx: ContextApp) -> None:
     if results:
         path = Path(results["db_path"].strip()).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        ctx.local_dbs.append(DBLocal.create_db(path, results["db_passwd"], results["db_name"]))
+        db = DBLocal.create_db(path, results["db_passwd"], results["db_name"])
+        ctx.add_database(db)
 
 def open_database(ctx: ContextApp) -> None:
     questions = [
@@ -145,22 +144,32 @@ def open_database(ctx: ContextApp) -> None:
     results = prompt(questions)
     if results:
         try:
-            ctx.local_dbs.append(DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"]))
+            ctx.add_database(DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"]))
         except CredentialsError:
             print("Incorrect credentials")
-
+            
+def share_database(ctx: ContextApp) -> None:
+    pass
 
 def list_databases(ctx: ContextApp) -> None:
+    local_lines = []
+    remote_lines = []
+    for idx, db in ctx.get_indexes_databases():
+        line = [idx, db.get_name(), Path(db.get_filename()).expanduser().resolve()]
+        if isinstance(db, DBLocal): 
+            local_lines.append(line)
+        else:
+            remote_lines.append(line)
     table = PrettyTable()
     table.field_names = ["N.", "Name", "Filepath"]
     table.title = "Local databases"
-    table.add_rows([[i, db.get_name(), Path(db.get_filename()).expanduser().resolve()] for i, db in enumerate(ctx.local_dbs, 1)])
+    table.add_rows(local_lines)
     table.set_style(TableStyle.SINGLE_BORDER)
     local_lines = table.get_string().splitlines()
 
     table.clear_rows()
     table.title = "Remote databases"
-    table.add_rows([[i, db.get_name(), Path(db.get_filename()).expanduser().resolve()] for i, db in enumerate(ctx.remote_dbs, 1)])
+    table.add_rows(remote_lines)
     remote_lines = table.get_string().splitlines()
     
     filling = len(local_lines[0]) if len(local_lines) < len(remote_lines) else len(remote_lines[0])
@@ -171,8 +180,9 @@ def list_databases(ctx: ContextApp) -> None:
         print(f"{line1}   {line2}")
 
 def list_entries(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
 
     table = PrettyTable()
@@ -180,16 +190,17 @@ def list_entries(ctx: ContextApp) -> None:
     table.field_names = ["Title", "Username", "Password", "Path"]
     table.title = "Database entries"
 
-    if db_type == "l":
-        table.add_rows([[entry.title, entry.username, entry.password, "/".join(entry.path)] for entry in ctx.local_dbs[idx].get_entries()])
-    elif db_type == "r":
-        table.add_rows([[entry.title, entry.username, entry.password, "/".join(entry.path)] for entry in ctx.remote_dbs[idx].get_entries()])
+    table.add_rows([
+        [entry.title, entry.username, entry.password, "/".join(entry.path)] 
+        for entry in db.get_entries()
+        ])
 
     print(table)
 
 def list_groups(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
 
     table = PrettyTable()
@@ -197,16 +208,14 @@ def list_groups(ctx: ContextApp) -> None:
     table.field_names = ["Name", "Path"]
     table.title = "Database groups"
 
-    if db_type == "l":
-        table.add_rows([[group.name, "/".join(group.path)] for group in ctx.local_dbs[idx].get_groups()])
-    elif db_type == "r":
-        table.add_rows([[group.name, "/".join(group.path)] for group in ctx.remote_dbs[idx].get_groups()])
+    table.add_rows([[group.name, "/".join(group.path)] for group in db.get_groups()])
 
     print(table)
     
 def add_group(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
     questions = [
             {
@@ -224,19 +233,16 @@ def add_group(ctx: ContextApp) -> None:
     if not results:
         return
 
-    if db_type == "l":
-        try:
-            ctx.local_dbs[idx].add_group(results["parent_group"].split("/"), results["group_name"])
-        except ValueError as e:
-            print(e)
-
-    if db_type == "r":
-        # TODO add logic for remote db
-        pass
+    try:
+        db.add_group(results["parent_group"].split("/"), results["group_name"])
+    except ValueError as e:
+        # TODO check that other errors may be raised, especially by remote dabatases.
+        print(e)
 
 def add_entry(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
     questions = [
             {
@@ -264,19 +270,16 @@ def add_entry(ctx: ContextApp) -> None:
     if not results:
         return
 
-    if db_type == "l":
-        try:
-            ctx.local_dbs[idx].add_entry(results["parent_group"].split("/"), results["entry_title"], results["entry_username"], results["entry_password"])
-        except KeyError as e:
-            print(e)
-
-    if db_type == "r":
-        # TODO add logic for remote db
-        pass
+    try:
+        db.add_entry(results["parent_group"].split("/"), results["entry_title"], results["entry_username"], results["entry_password"])
+    except KeyError as e:
+        # TODO check that other errors may be raised, especially by remote dabatases.
+        print(e)
 
 def delete_group(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
     questions = [
             {
@@ -289,19 +292,16 @@ def delete_group(ctx: ContextApp) -> None:
     if not results:
         return
 
-    if db_type == "l":
-        try:
-            ctx.local_dbs[idx].delete_group(results["group_path"].split("/"))
-        except KeyError as e:
-            print(e)
-
-    if db_type == "r":
-        # TODO add logic for remote db
-        pass
+    try:
+        db.delete_group(results["group_path"].split("/"))
+        # TODO check that other errors may be raised, especially by remote dabatases.
+    except KeyError as e:
+        print(e)
 
 def delete_entry(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
     questions = [
             {
@@ -314,32 +314,27 @@ def delete_entry(ctx: ContextApp) -> None:
     if not results:
         return
 
-    if db_type == "l":
-        try:
-            ctx.local_dbs[idx].delete_entry(results["entry_path"].split("/"))
-        except KeyError as e:
-            print(e)
-
-    if db_type == "r":
-        # TODO add logic for remote db
-        pass
+    try:
+        db.delete_entry(results["entry_path"].split("/"))
+    except KeyError as e:
+        # TODO check that other errors may be raised, especially by remote dabatases.
+        print(e)
 
 def save_changes(ctx: ContextApp) -> None:
-    idx, db_type = database_selection(ctx)
-    if not db_type:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+    if not db:
         return
-    if db_type == "l":
-        ctx.local_dbs[idx].save_changes()
-    elif db_type == "r":
-        ctx.remote_dbs[idx].save_changes()
+    
+    db.save_changes()
 
 def close_local_db(ctx: ContextApp):
-    idx, db_type = database_selection(ctx)
-    if db_type == "l":
-        db_to_close = ctx.local_dbs.pop(idx)
-        print(f"Closed local database: {db_to_close.get_name()}")
-
-    elif db_type == "r":
-        # TODO add logic to handle the transition from online to offline database
-        db_to_close = ctx.remote_dbs.pop(idx)
-        print(f"Closed remote database: {db_to_close.get_name()}")
+    # TODO add logic to handle the transition from online to offline database
+    idx = database_selection(ctx)
+    closed_db = ctx.remove_database(idx)
+    if not closed_db:
+        print("The chosen database is not open!")
+    elif isinstance(closed_db, DBLocal):
+        print(f"Closed local database: {closed_db.get_name()}")
+    else:
+        print(f"Closed remote database: {closed_db.get_name()}")

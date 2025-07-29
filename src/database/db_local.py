@@ -1,7 +1,8 @@
 from typing import Self
-from pykeepass import PyKeePass, create_database
+from pykeepass import PyKeePass, create_database, Entry, Group
+from .db_interface import DBInterface
 
-class DBLocal():
+class DBLocal(DBInterface):
 
     def __init__(self, path: str, passwd: str) -> None:
         self._kp_db = PyKeePass(path, passwd)
@@ -16,12 +17,12 @@ class DBLocal():
     def reset_db(self, path: str, passwd: str) -> None:
         self._kp_db = create_database(path, passwd)
 
-    def add_entry(self, destination_group, title: str, username: str, passwd: str):
+    def add_entry(self, destination_group, title: str, username: str, passwd: str) -> None:
         group = self._kp_db.find_groups(path=destination_group, first=True)
         if group is None:
             raise KeyError("The group for the entry doesn't exist!")
         
-        if self._kp_db.find_entries(group=group, title=title, first=True) is not None:
+        if self._kp_db.find_entries(group=group, title=title, first=True, recursive=False) is not None:
             raise KeyError("The entry under the specified group, with the specified title already exists!")
         
         self._kp_db.add_entry(group, title, username, passwd)
@@ -51,19 +52,16 @@ class DBLocal():
 
         self._kp_db.delete_group(group)
     
-    def change_name(self, new_name: str) -> None:
-        self._kp_db.database_name = new_name
-
     def get_name(self) -> str:
         return self._kp_db.database_name
 
     def get_filename(self) -> str:
         return self._kp_db.filename
 
-    def get_entries(self):
+    def get_entries(self) -> list[Entry]:
         return self._kp_db.entries
 
-    def get_groups(self):
+    def get_groups(self) -> list[Group]:
         return self._kp_db.groups
     
     def save_changes(self) -> None:
