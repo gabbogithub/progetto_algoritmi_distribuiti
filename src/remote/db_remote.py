@@ -1,12 +1,28 @@
+from typing import Self
+from Pyro5.core import URI
+from Pyro5.server import Daemon, expose
+from Pyro5.api import Proxy
+from Pyro5.errors import CommunicationError, NamingError, TimeoutError, ConnectionClosedError
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
 
 class DBExpose(DBInterface):
 
-    def __init__(self, db_local: DBLocal) -> None:
+    def __init__(self, db_local: DBLocal, leader_uri: URI) -> None:
         self._db_local = db_local
         self._followers = [] # TODO implement access to followers as property
         self._leader = None
+
+        # Try to connect to make sure that the remote object is active
+        try:
+            proxy = Proxy(leader_uri)
+            proxy._pyroBind()  # Forces connection to the remote object
+            self._leader = proxy
+        except CommunicationError as e:
+            print(f"Could not connect to the remote object: {e}")
+        except NamingError as e:
+            print(f"Problem with name resolution: {e}")
+
         self._uri = None
 
     @property
@@ -20,12 +36,16 @@ class DBExpose(DBInterface):
         self._uri = value
 
     @classmethod
-    def create_and_register(cls, db_local: DBLocal, daemon: Daemon) -> Self:
-        obj = cls(db_local)
-        uri = daemon.register(obj)
-        obj.uri = uri
-        print()
-    
+    def create_and_register(cls, db_local: DBLocal, leader_uri: URI, daemon: Daemon) -> Self:
+        remote_db = cls(db_local, leader_uri)
+        uri = daemon.register(remote_db)
+        remote_db.uri = uri
+        print(uri)
+        # TODO request addition to the followers list of the leader.
+        # TODO request list of URIs belonging to the other followers.
+        return remote_db
+
+    @expose
     def add_entry(self, destination_group, title, username, passwd) -> None:
         try:
             self._db_local.add_entry(destination_group, title, username, passwd)

@@ -27,8 +27,10 @@ class DBExpose(DBInterface):
         obj = cls(db_local)
         uri = daemon.register(obj)
         obj.uri = uri
-        print()
+        print(uri)
+        return obj
     
+    @expose
     def add_entry(self, destination_group, title, username, passwd) -> None:
         try:
             self._db_local.add_entry(destination_group, title, username, passwd)
