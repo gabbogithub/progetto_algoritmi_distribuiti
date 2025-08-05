@@ -20,7 +20,9 @@ class CLIApp():
                     "Delete group": actions.delete_group,
                     "Delete entry": actions.delete_entry,
                     "Save changes": actions.save_changes,
-                    "Close local database": actions.close_local_db,
+                    "Close database": actions.close_db,
+                    "Share local database": actions.share_database,
+                    "Connect to a remote database": actions.connect_database,
                     "Exit": self._exit_loop,
                     })
 

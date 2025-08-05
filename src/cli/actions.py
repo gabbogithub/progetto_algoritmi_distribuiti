@@ -1,4 +1,6 @@
 from pykeepass.exceptions import CredentialsError
+from Pyro5.api import URI
+from Pyro5.errors import CommunicationError, NamingError
 import questionary
 from questionary import prompt, ValidationError, Validator, Choice
 from prettytable import PrettyTable, TableStyle
@@ -6,6 +8,8 @@ from pathlib import Path
 from itertools import zip_longest
 from database.db_local import DBLocal
 from database.db_interface import DBInterface
+from remote.db_expose import DBExpose
+from remote.db_remote import DBRemote
 from context.context import ContextApp
 
 class NameValidator(Validator):
@@ -147,9 +151,6 @@ def open_database(ctx: ContextApp) -> None:
             ctx.add_database(DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"]))
         except CredentialsError:
             print("Incorrect credentials")
-            
-def share_database(ctx: ContextApp) -> None:
-    pass
 
 def list_databases(ctx: ContextApp) -> None:
     local_lines = []
@@ -328,7 +329,7 @@ def save_changes(ctx: ContextApp) -> None:
     
     db.save_changes()
 
-def close_local_db(ctx: ContextApp):
+def close_db(ctx: ContextApp):
     # TODO add logic to handle the transition from online to offline database
     idx = database_selection(ctx)
     closed_db = ctx.remove_database(idx)
@@ -338,3 +339,37 @@ def close_local_db(ctx: ContextApp):
         print(f"Closed local database: {closed_db.get_name()}")
     else:
         print(f"Closed remote database: {closed_db.get_name()}")
+            
+def share_database(ctx: ContextApp) -> None:
+    idx = database_selection(ctx)
+    db = ctx.get_database(idx)
+
+    if not db:
+        return
+
+    if isinstance(db, DBExpose) or isinstance(db, DBRemote):
+        print("The database to share needs to be local!")
+        return
+    
+    expose_db = DBExpose.create_and_register(db, ctx.daemon)
+
+    try:
+        ctx.replace_database(idx, expose_db)
+    except KeyError:
+        print("Something went wrong while adding the remote database" \
+        "to the list of open databases")
+
+def connect_database(ctx: ContextApp) -> None:
+    # TODO richiedi gli input con questionary e fai validazione.
+    # TODO gestire casi di file già esistenti con un certo nome.
+    uri_string = input("Inserisci l'URI: ")
+    password = input("Inserisci la password: ")
+    path = input("Inserisci il percorso per ")
+    uri = URI(uri_string)
+    try:
+        db_remote = DBRemote.create_and_register(uri, ctx.daemon)
+        ctx.add_database(db_remote)
+    except CommunicationError as e:
+            print(f"Could not connect to the remote object: {e}")
+    except NamingError as e:
+            print(f"Problem with name resolution: {e}")

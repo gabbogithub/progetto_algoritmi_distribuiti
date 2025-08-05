@@ -31,7 +31,7 @@ class DBExpose(DBInterface):
         return obj
     
     @expose
-    def add_entry(self, destination_group, title, username, passwd) -> None:
+    def add_entry(self, destination_group, title, username, passwd) -> bool:
         try:
             self._db_local.add_entry(destination_group, title, username, passwd)
         except:
@@ -62,6 +62,11 @@ class DBExpose(DBInterface):
         except:
             return False
         return True
+    
+    @expose
+    def send_database(self) -> bytes:
+        with open(self.get_filename(), "rb") as f:
+            return f.read()
     
     def get_name(self) -> str:
         return self._db_local.get_name()

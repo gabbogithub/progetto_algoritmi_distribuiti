@@ -20,6 +20,14 @@ class ContextApp():
         self._counter += 1
         self._dbs[self._counter] = db
 
+    def remove_database(self, db_id: int) -> DBInterface | None:
+        """Removes a database by its ID and returns it."""
+        return self._dbs.pop(db_id, None)
+    
+    def replace_database(self, db_id: int, new_db: DBInterface) -> None:
+        """Replaces the database at the given ID with the one passed as argument."""
+        self._dbs[db_id] = new_db
+
     def get_database(self, db_id: int) -> DBInterface | None:
         """Retrieves a database by its ID."""
         return self._dbs.get(db_id)
@@ -27,7 +35,3 @@ class ContextApp():
     def get_indexes_databases(self) -> ItemsView[int, DBInterface]:
         """Return all the dbs and their indexes"""
         return self._dbs.items()
-
-    def remove_database(self, db_id: int) -> DBInterface | None:
-        """Removes a database by its ID and returns it."""
-        return self._dbs.pop(db_id, None)
