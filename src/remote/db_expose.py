@@ -1,6 +1,8 @@
 from typing import Self
+import ipaddress
 from Pyro5.server import Daemon, expose
 from Pyro5.core import URI
+from Pyro5.api import current_context
 from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
@@ -9,8 +11,10 @@ class DBExpose(DBInterface):
 
     def __init__(self, db_local: DBLocal) -> None:
         self._db_local = db_local
-        self._followers = [] # TODO implement access to followers as property
-        self._uri = None
+        self._followers = [] # followers proxy objects
+        self._ips = set() # followers IPs TODO implement access to followers as property
+        self._uris = set() # followers URIs
+        self._uri = None # leader URI
 
     @property
     def uri(self) -> URI | None:
@@ -26,7 +30,7 @@ class DBExpose(DBInterface):
     def create_and_register(cls, db_local: DBLocal, daemon: Daemon) -> Self:
         obj = cls(db_local)
         uri = daemon.register(obj)
-        obj.uri = uri
+        obj.uri = str(uri)
         print(uri)
         return obj
     
@@ -64,12 +68,41 @@ class DBExpose(DBInterface):
         return True
     
     @expose
-    def send_database(self) -> bytes:
+    def send_database(self) -> bytes | None:
+        if not self._ip_check():
+            return None
         with open(self.get_filename(), "rb") as f:
             return f.read()
     
+    @expose
+    def send_followers_uris(self) -> set:
+        if self._ip_check():
+            return self._uris
+        return set()
+
+    @expose
+    def login(self, password: str, uri: str) -> bool:
+        if password == self.get_password():
+            client_ip = current_context.client_sock_addr[0]
+            ip_int = int(ipaddress.IPv4Address(client_ip))
+            self._ips.add(ip_int)
+            self._uris.add(uri)
+            return True
+        
+        return False
+    
+    def _ip_check(self) -> bool:
+        """Checks if the ip making a call is in the allowed list"""
+
+        client_ip = current_context.client_sock_addr[0]
+        ip_int = int(ipaddress.IPv4Address(client_ip))
+        return ip_int in self._ips
+    
     def get_name(self) -> str:
         return self._db_local.get_name()
+
+    def get_password(self) -> str:
+        return self._db_local.get_password()
     
     def get_filename(self) -> str:
         return self._db_local.get_filename()

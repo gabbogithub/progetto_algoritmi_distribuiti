@@ -1,5 +1,7 @@
 from typing import Self
 from base64 import b64decode
+import ipaddress
+import socket
 from Pyro5.core import URI
 from Pyro5.server import Daemon, expose
 from Pyro5.api import Proxy
@@ -15,16 +17,10 @@ class DBRemote(DBInterface):
         proxy = Proxy(leader_uri)
         proxy._pyroBind()  # Forces connection to the remote object.
         self._leader = proxy
-        local_db_data = self._leader.send_database()
-        decoded_data = b64decode(local_db_data["data"])
-        # TODO after adding mDNS, use the name of the exposed db to create the filename
-        # or ask the user where they want to save it.
-        with open("tmp/tmp.kdbx", "wb") as f:
-            f.write(decoded_data)
-        # TODO add password as a parameter, this is provided by the user because he needs to
-        # know it in order to connect
-        self._db_local = DBLocal("tmp/tmp.kdbx", passwd="prova")
-        self._followers = [] # TODO implement access to followers as property
+        leader_ip = socket.gethostbyname(leader_uri.host)
+        self._leader_ip = int(ipaddress.IPv4Address(leader_ip))
+        self._db_local = None
+        self._followers = None # TODO implement access to followers as property
         self._uri = None
 
     @property
@@ -38,13 +34,23 @@ class DBRemote(DBInterface):
         self._uri = value
 
     @classmethod
-    def create_and_register(cls, leader_uri: URI, daemon: Daemon) -> Self:
-        remote_db = cls(leader_uri)
-        uri = daemon.register(remote_db)
+    def create_and_register(cls, leader_uri: str, daemon: Daemon, password: str, path: str) -> Self | None:
+        remote_db = cls(URI(leader_uri))
+        uri = str(daemon.register(remote_db))
         remote_db.uri = uri
-        print(uri)
-        # TODO request addition to the followers list of the leader.
-        # TODO request list of URIs belonging to the other followers.
+
+        if not remote_db._leader.login(password, uri):
+            return None
+        
+        local_db_data = remote_db._leader.send_database()
+        decoded_data = b64decode(local_db_data["data"])
+        # TODO after adding mDNS, use the name of the exposed db to create the filename
+        # or ask the user where they want to save it.
+        with open(path, "wb") as f:
+            f.write(decoded_data)
+        remote_db._db_local = DBLocal(path, password)
+        remote_db._followers = remote_db._leader.send_followers_uris()
+        remote_db._followers.remove(uri)
         return remote_db
 
     
@@ -80,6 +86,9 @@ class DBRemote(DBInterface):
     
     def get_name(self) -> str:
         return self._db_local.get_name()
+
+    def get_password(self) -> str:
+        return self.db_local.get_password()
     
     def get_filename(self) -> str:
         return self._db_local.get_filename()

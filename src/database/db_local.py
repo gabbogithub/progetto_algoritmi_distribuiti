@@ -55,6 +55,9 @@ class DBLocal(DBInterface):
     def get_name(self) -> str:
         return self._kp_db.database_name
 
+    def get_password(self) -> str:
+        return self._kp_db.password
+
     def get_filename(self) -> str:
         return self._kp_db.filename
 

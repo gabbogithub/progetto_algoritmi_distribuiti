@@ -22,6 +22,10 @@ class DBInterface(ABC):
     @abstractmethod
     def get_name(self) -> str:
         pass
+
+    @abstractmethod
+    def get_password(self) -> str:
+        pass
     
     @abstractmethod
     def get_filename(self) -> str:

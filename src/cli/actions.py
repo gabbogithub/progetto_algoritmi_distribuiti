@@ -360,16 +360,32 @@ def share_database(ctx: ContextApp) -> None:
         "to the list of open databases")
 
 def connect_database(ctx: ContextApp) -> None:
-    # TODO richiedi gli input con questionary e fai validazione.
-    # TODO gestire casi di file già esistenti con un certo nome.
+    # TODO esponi la lista di database disponibili con mDNS
     uri_string = input("Inserisci l'URI: ")
-    password = input("Inserisci la password: ")
-    path = input("Inserisci il percorso per ")
-    uri = URI(uri_string)
-    try:
-        db_remote = DBRemote.create_and_register(uri, ctx.daemon)
-        ctx.add_database(db_remote)
-    except CommunicationError as e:
-            print(f"Could not connect to the remote object: {e}")
-    except NamingError as e:
-            print(f"Problem with name resolution: {e}")
+    questions = [
+            {
+                "type": "path",
+                "name": "db_path",
+                "message": "Insert a file name for the local copy of the database:",
+                "validate": NameValidator
+                },
+            {
+                "type": "password",
+                "name": "db_passwd",
+                "message": "Insert the database password:",
+                },
+            ]
+    results = prompt(questions)
+    if results:
+        path = Path(results["db_path"].strip()).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            db_remote = DBRemote.create_and_register(uri_string, ctx.daemon, results["db_passwd"], path)
+            if not db_remote:
+                print("You have inserted the wrong password")
+            else:
+                ctx.add_database(db_remote)
+        except CommunicationError as e:
+                print(f"Could not connect to the remote object: {e}")
+        except NamingError as e:
+                print(f"Problem with name resolution: {e}")
