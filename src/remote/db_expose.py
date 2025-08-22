@@ -17,11 +17,11 @@ class DBExpose(DBInterface):
         self._uri = None # leader URI
 
     @property
-    def uri(self) -> URI | None:
+    def uri(self) -> str | None:
         return self._uri
 
     @uri.setter
-    def uri(self, value: URI) -> None:
+    def uri(self, value: str) -> None:
         if self._uri is not None:
             raise AttributeError("URI has already been set and cannot be modified.")
         self._uri = value
@@ -31,7 +31,6 @@ class DBExpose(DBInterface):
         obj = cls(db_local)
         uri = daemon.register(obj)
         obj.uri = str(uri)
-        print(uri)
         return obj
     
     @expose
@@ -76,12 +75,13 @@ class DBExpose(DBInterface):
     
     @expose
     def send_followers_uris(self) -> set:
-        if self._ip_check():
-            return self._uris
-        return set()
+        if not self._ip_check():
+            return set()
+        return self._uris
 
     @expose
     def login(self, password: str, uri: str) -> bool:
+        """Check if client knows the password. This allows to modify the shared database"""
         if password == self.get_password():
             client_ip = current_context.client_sock_addr[0]
             ip_int = int(ipaddress.IPv4Address(client_ip))
@@ -97,6 +97,9 @@ class DBExpose(DBInterface):
         client_ip = current_context.client_sock_addr[0]
         ip_int = int(ipaddress.IPv4Address(client_ip))
         return ip_int in self._ips
+    
+    def unregister_object(self, daemon: Daemon) -> None:
+        daemon.unregister(self)
     
     def get_name(self) -> str:
         return self._db_local.get_name()

@@ -52,6 +52,9 @@ class DBLocal(DBInterface):
 
         self._kp_db.delete_group(group)
     
+    def set_name(self, name: str) -> None:
+        self._kp_db.database_name = name
+    
     def get_name(self) -> str:
         return self._kp_db.database_name
 

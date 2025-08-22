@@ -12,30 +12,37 @@ from database.db_local import DBLocal
 
 class DBRemote(DBInterface):
 
-    def __init__(self, leader_uri: URI) -> None:
+    def __init__(self, leader_uri_str: str) -> None:
         # Try to connect to make sure that the remote object is active.
+        leader_uri = URI(leader_uri_str)
         proxy = Proxy(leader_uri)
         proxy._pyroBind()  # Forces connection to the remote object.
         self._leader = proxy
         leader_ip = socket.gethostbyname(leader_uri.host)
         self._leader_ip = int(ipaddress.IPv4Address(leader_ip))
+        self._leader_port = int(leader_uri.port)
+        self._leader_uri = leader_uri_str
         self._db_local = None
         self._followers = None # TODO implement access to followers as property
         self._uri = None
 
     @property
-    def uri(self) -> URI | None:
+    def uri(self) -> str | None:
         return self._uri
 
     @uri.setter
-    def uri(self, value: URI) -> None:
+    def uri(self, value: str) -> None:
         if self._uri is not None:
             raise AttributeError("URI has already been set and cannot be modified.")
         self._uri = value
 
+    @property
+    def leader_uri(self) -> str:
+        return self._leader_uri
+
     @classmethod
     def create_and_register(cls, leader_uri: str, daemon: Daemon, password: str, path: str) -> Self | None:
-        remote_db = cls(URI(leader_uri))
+        remote_db = cls(leader_uri)
         uri = str(daemon.register(remote_db))
         remote_db.uri = uri
 
@@ -83,6 +90,9 @@ class DBRemote(DBInterface):
         except:
             return False
         return True
+    
+    def set_name(self, name: str) -> None:
+        self._db_local.set_name(name)
     
     def get_name(self) -> str:
         return self._db_local.get_name()
