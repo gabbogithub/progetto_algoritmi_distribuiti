@@ -9,13 +9,14 @@ from Pyro5.errors import CommunicationError, NamingError
 from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
+from .pyro_tls import CertCheckingProxy
 
 class DBRemote(DBInterface):
 
     def __init__(self, leader_uri_str: str) -> None:
         # Try to connect to make sure that the remote object is active.
         leader_uri = URI(leader_uri_str)
-        proxy = Proxy(leader_uri)
+        proxy = CertCheckingProxy(leader_uri)
         proxy._pyroBind()  # Forces connection to the remote object.
         self._leader = proxy
         leader_ip = socket.gethostbyname(leader_uri.host)

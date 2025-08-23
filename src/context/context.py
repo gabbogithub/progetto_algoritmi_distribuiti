@@ -4,6 +4,7 @@ from Pyro5.server import Daemon
 from zeroconf import Zeroconf, ServiceBrowser
 from database.db_interface import DBInterface
 from remote.mdns_services import ContinuousListener, UriAdvertiser, SERVICE_TYPE
+from remote.pyro_tls import CertValidatingDaemon
 
 class ContextApp():
     """Context class that holds essential values used by different compontents
@@ -11,7 +12,7 @@ class ContextApp():
     def __init__(self):
         self._dbs = {}
         self._counter = 0
-        self.daemon = Daemon()
+        self.daemon = CertValidatingDaemon()
         self._zeroconf = Zeroconf()
         ip, port = self.daemon.locationStr.split(":")
         self._listener = ContinuousListener(ip, port)
