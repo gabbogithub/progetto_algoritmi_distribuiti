@@ -1,7 +1,9 @@
 from collections.abc import ItemsView
 import threading
+from queue import Queue
 from Pyro5.server import Daemon
 from zeroconf import Zeroconf, ServiceBrowser
+from questionary import print
 from database.db_interface import DBInterface
 from remote.mdns_services import ContinuousListener, UriAdvertiser, SERVICE_TYPE
 from remote.pyro_tls import CertValidatingDaemon
@@ -19,6 +21,7 @@ class ContextApp():
         self._advertiser = UriAdvertiser(self._zeroconf, ip, port)
         # Start continuous browsing in background without having to call any method
         self._browser = ServiceBrowser(self._zeroconf, SERVICE_TYPE, self._listener)
+        self._notifications = Queue()
 
     def start_daemon_loop(self) -> None:
         """Starts the Pyro5 daemon in a separate thread."""
@@ -81,3 +84,12 @@ class ContextApp():
     
     def get_advertiser(self) -> UriAdvertiser:
         return self._advertiser
+    
+    def add_notification(self, message: str) -> None:
+        self._notifications.put(message)
+    
+    def notifications_counter(self) -> int:
+        return self._notifications.qsize()
+    
+    def print_message(self, message: str) -> None:
+        print(message, style="bold fg:red")

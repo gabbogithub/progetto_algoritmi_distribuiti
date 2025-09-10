@@ -1,8 +1,10 @@
-import questionary
 from sys import exit
 from collections import defaultdict
 from context.context import ContextApp
+import questionary
 from . import actions
+import threading
+from time import sleep
 
 class CLIApp():
 
@@ -28,8 +30,9 @@ class CLIApp():
                     })
 
 
-    def run(self):
+    def run(self) -> None:
         while True:
+            questionary.print(f"\r[Unread notifications]: {self.ctx.notifications_counter()}", style="bold fg:yellow")
             action = questionary.select(
                 "What do you want to do?",
                 choices=self.menu_actions.keys()).ask()
