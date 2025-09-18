@@ -12,7 +12,7 @@ class DBExpose(DBInterface):
     def __init__(self, db_local: DBLocal) -> None:
         self._db_local = db_local
         self._followers = [] # followers proxy objects
-        self._ips = set() # followers IPs TODO implement access to followers as property
+        self._sock_addrs = set() # followers IPs TODO implement access to followers as property
         self._uris = set() # followers URIs
         self._uri = None # leader URI
 
@@ -83,20 +83,18 @@ class DBExpose(DBInterface):
     def login(self, password: str, uri: str) -> bool:
         """Check if client knows the password. This allows to modify the shared database"""
         if password == self.get_password():
-            client_ip = current_context.client_sock_addr[0]
-            ip_int = int(ipaddress.IPv4Address(client_ip))
-            self._ips.add(ip_int)
+            client_addr = current_context.client_sock_addr
+            self._sock_addrs.add(client_addr)
             self._uris.add(uri)
             return True
         
         return False
     
-    def _ip_check(self) -> bool:
+    def _addr_check(self) -> bool:
         """Checks if the ip making a call is in the allowed list"""
 
-        client_ip = current_context.client_sock_addr[0]
-        ip_int = int(ipaddress.IPv4Address(client_ip))
-        return ip_int in self._ips
+        client_addr = current_context.client_sock_addr
+        return client_addr in self._sock_addrs
     
     def unregister_object(self, daemon: Daemon) -> None:
         daemon.unregister(self)
