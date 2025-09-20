@@ -3,17 +3,18 @@ import Pyro5.api
 
 # ---GENERAL TLS CONFIGURATIONS---
 Pyro5.config.SSL = True
-Pyro5.config.SSL_CACERTS = "certs/combined_certs.pem"    # to make ssl accept the self-signed server cert
+Pyro5.config.SSL_CACERTS = "certs/CA/ca.crt"    # to make ssl accept the self-signed server cert
 
 # ---CLIENT TLS CONFIGURATIONS---
-Pyro5.config.SSL_CLIENTCERT = "certs/client_cert.pem"
-Pyro5.config.SSL_CLIENTKEY = "certs/client_key.pem"
+#Pyro5.config.SSL_CLIENTCERT = "certs/client_cert.pem"
+#Pyro5.config.SSL_CLIENTKEY = "certs/client_key.pem"
 
 # ---SERVER TLS CONFIGURATIONS---
 Pyro5.config.SSL_REQUIRECLIENTCERT = True   # enable 2-way ssl
-Pyro5.config.SSL_SERVERCERT = "certs/server_cert.pem"
-Pyro5.config.SSL_SERVERKEY = "certs/server_key.pem"
+Pyro5.config.SSL_SERVERCERT = "certs/server/server.crt"
+Pyro5.config.SSL_SERVERKEY = "certs/server/server.key"
 
+"""
 class CertCheckingProxy(Pyro5.api.Proxy):
     def verify_cert(self, cert):
         if not cert:
@@ -50,3 +51,4 @@ class CertValidatingDaemon(Pyro5.api.Daemon):
         if subject["organizationName"] != "Algoritmi distribuiti":
             raise Pyro5.errors.CommunicationError("cert not for the expected subject")
         return super(CertValidatingDaemon, self).validateHandshake(conn, data)
+"""

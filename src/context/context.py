@@ -2,19 +2,31 @@ from collections.abc import ItemsView
 import threading
 from queue import Queue
 from Pyro5.server import Daemon
+import Pyro5.api
 from zeroconf import Zeroconf, ServiceBrowser
 from questionary import print
 from database.db_interface import DBInterface
 from remote.mdns_services import ContinuousListener, UriAdvertiser, SERVICE_TYPE
-from remote.pyro_tls import CertValidatingDaemon
 
 class ContextApp():
     """Context class that holds essential values used by different compontents
     of the application."""
-    def __init__(self):
+    def __init__(self, cert_path: str, cert_key_path: str):
+        # ---GENERAL TLS CONFIGURATIONS---
+        Pyro5.config.SSL = True
+        Pyro5.config.SSL_CACERTS = "certs/CA/ca.crt"    # to make ssl accept the self-signed server cert
+
+        # ---CLIENT TLS CONFIGURATIONS---
+        Pyro5.config.SSL_CLIENTCERT = cert_path
+        Pyro5.config.SSL_CLIENTKEY = cert_key_path
+
+        # ---SERVER TLS CONFIGURATIONS---
+        Pyro5.config.SSL_REQUIRECLIENTCERT = True   # enable 2-way ssl
+        Pyro5.config.SSL_SERVERCERT = cert_path
+        Pyro5.config.SSL_SERVERKEY = cert_key_path
         self._dbs = {}
         self._counter = 0
-        self.daemon = CertValidatingDaemon()
+        self.daemon = Daemon()
         self._zeroconf = Zeroconf()
         ip, port = self.daemon.locationStr.split(":")
         self._listener = ContinuousListener(ip, port)
@@ -92,4 +104,4 @@ class ContextApp():
         return self._notifications.qsize()
     
     def print_message(self, message: str) -> None:
-        print(message, style="bold fg:red")
+        print(message, style="bold")

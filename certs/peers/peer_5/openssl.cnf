@@ -1,0 +1,16 @@
+[ req ]
+distinguished_name  = req_distinguished_name
+prompt              = no
+
+[ req_distinguished_name ]
+CN = peer_5   # Common Name = peer identity
+
+[ v3_peer ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+IP.1 = 127.0.0.1

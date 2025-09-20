@@ -4,28 +4,33 @@ import ipaddress
 import socket
 from Pyro5.core import URI
 from Pyro5.server import Daemon, expose
-from Pyro5.api import Proxy
+from Pyro5.api import Proxy, current_context
 from Pyro5.errors import CommunicationError, NamingError
 from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
-from .pyro_tls import CertCheckingProxy
+from context.context import ContextApp
 
 class DBRemote(DBInterface):
 
-    def __init__(self, leader_uri_str: str) -> None:
+    def __init__(self, leader_uri_str: str, context: ContextApp) -> None:
         # Try to connect to make sure that the remote object is active.
         leader_uri = URI(leader_uri_str)
-        proxy = CertCheckingProxy(leader_uri)
-        proxy._pyroBind()  # Forces connection to the remote object.
+        proxy = Proxy(leader_uri)
+        try:
+            proxy._pyroBind() # Forces the connection to the remote object.
+        except Exception as e:
+            print(str(e))
+            return False
         self._leader = proxy
-        leader_ip = socket.gethostbyname(leader_uri.host)
-        self._leader_ip = int(ipaddress.IPv4Address(leader_ip))
-        self._leader_port = int(leader_uri.port)
+        cert = proxy._pyroConnection.sock.getpeercert()
+        subject = dict(x[0] for x in cert["subject"])
+        self._leader_cn = subject.get("commonName")
         self._leader_uri = leader_uri_str
         self._db_local = None
-        self._followers = None # TODO implement access to followers as property
+        self._followers_uris = None # TODO implement access to followers as property
         self._uri = None
+        self._ctx = context
 
     @property
     def uri(self) -> str | None:
@@ -42,23 +47,26 @@ class DBRemote(DBInterface):
         return self._leader_uri
 
     @classmethod
-    def create_and_register(cls, leader_uri: str, daemon: Daemon, password: str, path: str) -> Self | None:
-        remote_db = cls(leader_uri)
-        uri = str(daemon.register(remote_db))
+    def create_and_register(cls, leader_uri: str, context: ContextApp, password: str, path: str) -> Self | None:
+        try:
+            remote_db = cls(leader_uri, context)
+        except (CommunicationError, NamingError):
+            return None
+
+        uri = str(context.daemon.register(remote_db))
         remote_db.uri = uri
 
         if not remote_db._leader.login(password, uri):
+            context.daemon.unregister(remote_db)
             return None
         
         local_db_data = remote_db._leader.send_database()
         decoded_data = b64decode(local_db_data["data"])
-        # TODO after adding mDNS, use the name of the exposed db to create the filename
-        # or ask the user where they want to save it.
         with open(path, "wb") as f:
             f.write(decoded_data)
         remote_db._db_local = DBLocal(path, password)
-        remote_db._followers = remote_db._leader.send_followers_uris()
-        remote_db._followers.remove(uri)
+        remote_db._followers_uris = remote_db._leader.send_followers_uris()
+        remote_db._followers_uris.remove(uri)
         return remote_db
 
     
@@ -66,7 +74,8 @@ class DBRemote(DBInterface):
         try:
             self._leader.add_entry(destination_group, title, username, passwd)
             self._db_local.add_entry(destination_group, title, username, passwd)
-        except:
+        except Exception as e:
+            print(f"{e}")
             return False
         
         return True
@@ -91,6 +100,28 @@ class DBRemote(DBInterface):
         except:
             return False
         return True
+    
+    @expose
+    def add_uri(self, uri: str) -> bool:
+        if not self._cn_check():
+            return False
+        self._followers_uris.add(uri)
+        self.print_message(f"A new follower was added to database {self.get_name()}")
+        return True
+    
+    def print_message(self, message: str) -> None:
+        self._ctx.print_message(message)
+    
+    def _cn_check(self) -> bool:
+        """Checks if the client that is making a call has a common name in the allowed list"""
+        client_cn = self._get_caller_cn()
+        return client_cn == self._leader_cn
+    
+    def _get_caller_cn(self) -> str:
+        """Return the Common Name of the caller"""
+        cert = current_context.client.getpeercert()
+        subject = dict(x[0] for x in cert["subject"])
+        return subject.get("commonName")
     
     def set_name(self, name: str) -> None:
         self._db_local.set_name(name)

@@ -83,7 +83,7 @@ def database_selection(ctx: ContextApp) -> int:
         choices[display_name] = db_id
 
     if not choices:
-        questionary.print("There are no open databases!")
+        questionary.print("There are no open databases!", style="bold fg:red")
         return -1
     
     while True:
@@ -150,7 +150,7 @@ def open_database(ctx: ContextApp) -> None:
         try:
             ctx.add_database(DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"]))
         except CredentialsError:
-           questionary.print("Incorrect credentials")
+           questionary.print("Incorrect credentials", style="bold fg:red")
 
 def list_databases(ctx: ContextApp) -> None:
     local_lines = []
@@ -242,7 +242,7 @@ def add_group(ctx: ContextApp) -> None:
         db.add_group(results["parent_group"].split("/"), results["group_name"])
     except ValueError as e:
         # TODO check that other errors may be raised, especially by remote dabatases.
-        questionary.print(e)
+        questionary.print(f"{e}", style="bold fg:red")
 
 def add_entry(ctx: ContextApp) -> None:
     idx = database_selection(ctx)
@@ -279,7 +279,7 @@ def add_entry(ctx: ContextApp) -> None:
         db.add_entry(results["parent_group"].split("/"), results["entry_title"], results["entry_username"], results["entry_password"])
     except KeyError as e:
         # TODO check that other errors may be raised, especially by remote dabatases.
-        questionary.print(e)
+        questionary.print(f"{e}", style="bold fg:red")
 
 def delete_group(ctx: ContextApp) -> None:
     idx = database_selection(ctx)
@@ -301,7 +301,7 @@ def delete_group(ctx: ContextApp) -> None:
         db.delete_group(results["group_path"].split("/"))
         # TODO check that other errors may be raised, especially by remote dabatases.
     except KeyError as e:
-        questionary.print(e)
+        questionary.print(f"{e}", style="bold fg:red")
 
 def delete_entry(ctx: ContextApp) -> None:
     idx = database_selection(ctx)
@@ -323,7 +323,7 @@ def delete_entry(ctx: ContextApp) -> None:
         db.delete_entry(results["entry_path"].split("/"))
     except KeyError as e:
         # TODO check that other errors may be raised, especially by remote dabatases.
-        questionary.print(e)
+        questionary.print(f"{e}", style="bold fg:red")
 
 def save_changes(ctx: ContextApp) -> None:
     idx = database_selection(ctx)
@@ -338,7 +338,7 @@ def close_db(ctx: ContextApp) -> None:
     idx = database_selection(ctx)
     closed_db = ctx.remove_database(idx)
     if not closed_db:
-        questionary.print("The chosen database is not open!")
+        questionary.print("The chosen database is not open!", style="bold fg:red")
     elif isinstance(closed_db, DBLocal):
         questionary.print(f"Closed local database: {closed_db.get_name()}")
     elif isinstance(closed_db, DBExpose):
@@ -373,14 +373,14 @@ def share_database(ctx: ContextApp) -> None:
         return
 
     if isinstance(db, DBExpose) or isinstance(db, DBRemote):
-        questionary.print("The database to share needs to be local!")
+        questionary.print("The database to share needs to be local!", style="bold fg:red")
         return
     
     if db.get_name() in ctx.get_advertiser().get_services():
-        questionary.print("You have already shared a database with that name!")
+        questionary.print("You have already shared a database with that name!", style="bold fg:red")
         return
     
-    expose_db = DBExpose.create_and_register(db, ctx.daemon)
+    expose_db = DBExpose.create_and_register(db, ctx)
     ctx.register_ignored_service(expose_db.uri)
     ctx.register_uri(expose_db.get_name(), expose_db.uri)
 
@@ -388,16 +388,17 @@ def share_database(ctx: ContextApp) -> None:
         ctx.replace_database(idx, expose_db)
     except KeyError:
         questionary.print("Something went wrong while adding the remote database" \
-            "to the list of open databases")
+            "to the list of open databases", style="bold fg:red")
 
 def connect_database(ctx: ContextApp) -> None:
+    # Add check for when the user inputs the name of a db that doesn't exist
     choices = {}
     for name, info in ctx.get_services_information():
         display_name = f"{name.split(".")[0]} ({info[1]}) ({info[2]})"
         choices[display_name] = (info[0], name)
 
     if not choices:
-        questionary.print("There are no exposed databases!")
+        questionary.print("There are no exposed databases!", style="bold fg:red")
         return
     
     while True:
@@ -437,9 +438,9 @@ def connect_database(ctx: ContextApp) -> None:
         path = Path(results["db_path"].strip()).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            db_remote = DBRemote.create_and_register(selected_uri, ctx.daemon, results["db_passwd"], path)
+            db_remote = DBRemote.create_and_register(selected_uri, ctx, results["db_passwd"], path)
             if not db_remote:
-                questionary.print("You have inserted the wrong password")
+                questionary.print("Something went wrong during the creation of the remote database", style="bold fg:red")
             else:
                 # There could be a mismatch between the local name given by the leader of the database and the actual exposed name
                 # if the name chosen was already chosen by a mDNS service.
@@ -448,8 +449,8 @@ def connect_database(ctx: ContextApp) -> None:
                 ctx.remove_service(choices[selected_display_name][1])
                 ctx.add_database(db_remote)
         except CommunicationError as e:
-            questionary.print(f"Could not connect to the remote object: {e}")
+            questionary.print(f"Could not connect to the remote object: {e}", style="bold fg:red")
         except NamingError as e:
-            questionary.print(f"Problem with name resolution: {e}")
+            questionary.print(f"Problem with name resolution: {e}", style="bold fg:red")
         finally:
             return

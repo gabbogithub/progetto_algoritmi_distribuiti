@@ -1,20 +1,22 @@
 from typing import Self
 import ipaddress
 from Pyro5.server import Daemon, expose
+from Pyro5.errors import CommunicationError, NamingError
 from Pyro5.core import URI
-from Pyro5.api import current_context
+from Pyro5.api import Proxy, current_context
 from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
+from context.context import ContextApp
 
 class DBExpose(DBInterface):
 
-    def __init__(self, db_local: DBLocal) -> None:
+    def __init__(self, db_local: DBLocal, context: ContextApp) -> None:
         self._db_local = db_local
-        self._followers = [] # followers proxy objects
-        self._sock_addrs = set() # followers IPs TODO implement access to followers as property
-        self._uris = set() # followers URIs
+        self._followers_cn = set() # followers Common Names
+        self._followers_uris = set() # followers URIs
         self._uri = None # leader URI
+        self._ctx = context
 
     @property
     def uri(self) -> str | None:
@@ -27,14 +29,14 @@ class DBExpose(DBInterface):
         self._uri = value
 
     @classmethod
-    def create_and_register(cls, db_local: DBLocal, daemon: Daemon) -> Self:
-        obj = cls(db_local)
-        uri = daemon.register(obj)
+    def create_and_register(cls, db_local: DBLocal, context: ContextApp) -> Self:
+        obj = cls(db_local, context)
+        uri = context.daemon.register(obj)
         obj.uri = str(uri)
         return obj
     
     @expose
-    def add_entry(self, destination_group, title, username, passwd) -> bool:
+    def add_entry(self, destination_group: list[str], title: str, username: str, passwd: str) -> bool:
         try:
             self._db_local.add_entry(destination_group, title, username, passwd)
         except:
@@ -68,33 +70,66 @@ class DBExpose(DBInterface):
     
     @expose
     def send_database(self) -> bytes | None:
-        if not self._ip_check():
+        if not self._cn_check():
             return None
         with open(self.get_filename(), "rb") as f:
             return f.read()
     
     @expose
-    def send_followers_uris(self) -> set:
-        if not self._ip_check():
+    def send_followers_uris(self) -> set[str]:
+        if not self._cn_check():
             return set()
-        return self._uris
+        return self._followers_uris
 
     @expose
     def login(self, password: str, uri: str) -> bool:
-        """Check if client knows the password. This allows to modify the shared database"""
-        if password == self.get_password():
-            client_addr = current_context.client_sock_addr
-            self._sock_addrs.add(client_addr)
-            self._uris.add(uri)
-            return True
+        """Check if the client knows the password. This allows to modify the shared database"""
+        if not password == self.get_password():
+            return False
         
-        return False
-    
-    def _addr_check(self) -> bool:
-        """Checks if the ip making a call is in the allowed list"""
+        caller_cn = self._get_caller_cn()
+        client_uri = URI(uri)
+        proxy = Proxy(client_uri)
 
-        client_addr = current_context.client_sock_addr
-        return client_addr in self._sock_addrs
+        try:
+            proxy._pyroBind()
+            has_failure = False
+            # TODO handle the case where one of the followers disconnected but it's still in the followers list
+            for follower_uri in self._followers_uris:
+                with Proxy(URI(follower_uri)) as follower_proxy:
+                    follower_proxy._pyroTimeout = 5.0
+                    try:
+                        if not follower_proxy.add_uri(uri):
+                            has_failure = True
+                    except CommunicationError:
+                        pass
+            self._followers_cn.add(caller_cn)
+            self._followers_uris.add(uri)
+            proxy._pyroRelease()
+        except Exception as e:
+            self.print_message(f"Something went wrong: {e}")
+            return False
+    
+        if has_failure:
+            self.print_message(f"A client was added to database {self.get_name()} but one of the followers couldn't add them")
+        else:
+            self.print_message(f"A client was added to database {self.get_name()}")
+
+        return True
+        
+    def _cn_check(self) -> bool:
+        """Checks if the client that is making a call has a common name in the allowed list"""
+        client_cn = self._get_caller_cn()
+        return client_cn in self._followers_cn
+    
+    def _get_caller_cn(self) -> str:
+        """Return the Common Name of the caller"""
+        cert = current_context.client.getpeercert()
+        subject = dict(x[0] for x in cert["subject"])
+        return subject.get("commonName")
+    
+    def print_message(self, message: str) -> None:
+        self._ctx.print_message(message)
     
     def unregister_object(self, daemon: Daemon) -> None:
         daemon.unregister(self)
