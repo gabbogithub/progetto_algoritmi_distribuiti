@@ -1,5 +1,8 @@
 from typing import Self
-import ipaddress
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from time import time
+from uuid import uuid4
 from Pyro5.server import Daemon, expose
 from Pyro5.errors import CommunicationError, NamingError
 from Pyro5.core import URI
@@ -8,15 +11,19 @@ from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
 from context.context import ContextApp
+from .remote_data_structures import StatusCode, Operation, OperationData, ReturnCode
 
 class DBExpose(DBInterface):
 
     def __init__(self, db_local: DBLocal, context: ContextApp) -> None:
         self._db_local = db_local
-        self._followers_cn = set() # followers Common Names
-        self._followers_uris = set() # followers URIs
+        self._followers_cn = {} # followers Common Names
         self._uri = None # leader URI
         self._ctx = context
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._lock = Lock()
+        self._status = StatusCode.FREE
+        self._local_id = None
 
     @property
     def uri(self) -> str | None:
@@ -27,6 +34,10 @@ class DBExpose(DBInterface):
         if self._uri is not None:
             raise AttributeError("URI has already been set and cannot be modified.")
         self._uri = value
+
+    @property
+    def local_id(self) -> int | None:
+        return self._db_local.local_id
 
     @classmethod
     def create_and_register(cls, db_local: DBLocal, context: ContextApp) -> Self:
@@ -79,11 +90,14 @@ class DBExpose(DBInterface):
     def send_followers_uris(self) -> set[str]:
         if not self._cn_check():
             return set()
-        return self._followers_uris
+        return set(self._followers_cn.keys())
 
     @expose
     def login(self, password: str, uri: str) -> bool:
         """Check if the client knows the password. This allows to modify the shared database"""
+        # TODO Remember to lock the operation and maybe return a return code and status code
+
+        self._status = StatusCode.FOLLOWER_CHANGE
         if not password == self.get_password():
             return False
         
@@ -93,22 +107,49 @@ class DBExpose(DBInterface):
 
         try:
             proxy._pyroBind()
+            dead_followers = set()
             has_failure = False
-            # TODO handle the case where one of the followers disconnected but it's still in the followers list
-            for follower_uri in self._followers_uris:
+
+            # Inform the followers that a new one is joining.
+            for follower_uri in self._followers_cn:
                 with Proxy(URI(follower_uri)) as follower_proxy:
-                    follower_proxy._pyroTimeout = 5.0
+                    follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
+                                                      # otherwise the follower is overwhelmed with connections and can't respond.
                     try:
                         if not follower_proxy.add_uri(uri):
                             has_failure = True
-                    except CommunicationError:
-                        pass
-            self._followers_cn.add(caller_cn)
-            self._followers_uris.add(uri)
+                    except (CommunicationError, NameError):
+                        dead_followers.add(follower_uri)
+
+            # Cleanup dead followers.
+            if len(dead_followers) > 0:
+                for dead_follower in dead_followers:
+                    del self._followers_cn[dead_follower]
+    
+                for follower_uri in self._followers_cn:
+                    with Proxy(URI(follower_uri)) as follower_proxy:
+                        follower_proxy._pyroTimeout = 5.0
+                        try:
+                            follower_proxy.remove_uris(dead_followers)
+                        except (CommunicationError, NameError):
+                            # If one the remaining followers stops responding it's fine
+                            # because they are synchronised with respect to the active followers
+                            # and will be removed in the future if they remain unresponsive.
+                            # They will undestand on their own that the dead follower is unresponsive.
+                            pass
+
+            with open(self.get_filename(), "rb") as f:
+                db_data = f.read()
+            if not proxy.receive_db(db_data):
+                return False
+            if not proxy.receive_uris(set(self._followers_cn.keys())):
+                return False
             proxy._pyroRelease()
-        except Exception as e:
-            self.print_message(f"Something went wrong: {e}")
+        except (CommunicationError, NameError):
             return False
+            
+        self._followers_cn[uri] = caller_cn
+        self._status = StatusCode.FREE
     
         if has_failure:
             self.print_message(f"A client was added to database {self.get_name()} but one of the followers couldn't add them")
@@ -116,11 +157,80 @@ class DBExpose(DBInterface):
             self.print_message(f"A client was added to database {self.get_name()}")
 
         return True
+    
+    @expose
+    def propose_add_entry(self, destination_group: list[str], title: str, username: str, passwd: str, uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._lock.acquire(timeout=5):
+            return (ReturnCode.ERROR, self._status)
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.ADD_ENTRY, {"destination_group": destination_group, "title": title, "username": username, "passwd": passwd}, uri)
+        return (ReturnCode.OK, self._status)
+    
+    @expose
+    def propose_add_group(self, parent_group: list[str], group_name: str, uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._lock.acquire(timeout=5):
+            return (ReturnCode.ERROR, self._status)
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.ADD_GROUP, {"parent_group": parent_group, "group_name": group_name}, uri)
+        return (ReturnCode.OK, self._status)
+
+    @expose
+    def propose_delete_entry(self, entry_path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._lock.acquire(timeout=5):
+            return (ReturnCode.ERROR, self._status)
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.DELETE_ENTRY, {"entry_path": entry_path}, uri)
+        return (ReturnCode.OK, self._status)
+
+    @expose
+    def propose_delete_group(self, path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._lock.acquire(timeout=5):
+            return (ReturnCode.ERROR, self._status)
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.DELETE_GROUP, {"path": path}, uri)
+        return (ReturnCode.OK, self._status)
+    
+    def propose_change(self, operation: Operation, data: OperationData, uri: str) -> None:
+        notification_message = ""
+        match operation:
+            case Operation.ADD_ENTRY:
+                notification_message = f"Entry addition titled {data["username"]} with username {data["username"]} and password {data["passwd"]} in path {'/'.join(data["destination_group"])}"
+            case Operation.ADD_GROUP:
+                notification_message = f"Group addition named {data["group_name"]} in parent group {'/'.join(data["parent_group"])}"
+            case Operation.DELETE_ENTRY:
+                notification_message = f"Entity elimination with path {'/'.join(data["entry_path"])}"
+            case Operation.DELETE_GROUP:
+                notification_message = f"Group elimination with path {'/'.join(data["path"])}"
+            case _:
+                with Proxy(URI(uri)) as proxy:
+                    proxy._pyroTimeout = 5.0
+                    proxy.remote_print_message("The specified operation is not supported")
+                    return
+                
+        dead_followers = set()
+        proposition_id = uuid4().int
+        timestamp = time()
+        # TODO Remember to remove the requester (because they are obviously in favor) and also to add a notification for the leader
+        for follower_uri in self._followers_cn:
+            with Proxy(URI(follower_uri)) as follower_proxy:
+                follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
+                                                  # otherwise the follower is overwhelmed with connections and can't respond.
+                try:
+                    follower_proxy.add_notification(notification_message, timestamp, proposition_id)
+                except (CommunicationError, NameError):
+                    dead_followers.add(follower_uri)
+
+        self._status = StatusCode.FREE
+        self._lock.release()
         
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""
         client_cn = self._get_caller_cn()
-        return client_cn in self._followers_cn
+        return client_cn in self._followers_cn.values()
     
     def _get_caller_cn(self) -> str:
         """Return the Common Name of the caller"""

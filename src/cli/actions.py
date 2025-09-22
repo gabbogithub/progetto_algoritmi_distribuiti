@@ -1,3 +1,4 @@
+from time import time
 from pykeepass.exceptions import CredentialsError
 from Pyro5.api import URI
 from Pyro5.errors import CommunicationError, NamingError
@@ -129,7 +130,8 @@ def create_database(ctx: ContextApp) -> None:
         path = Path(results["db_path"].strip()).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         db = DBLocal.create_db(path, results["db_passwd"], results["db_name"])
-        ctx.add_database(db)
+        local_id = ctx.add_database(db)
+        db.local_id = local_id
 
 def open_database(ctx: ContextApp) -> None:
     questions = [
@@ -148,7 +150,9 @@ def open_database(ctx: ContextApp) -> None:
     results = prompt(questions)
     if results:
         try:
-            ctx.add_database(DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"]))
+            local_db = DBLocal(Path(results["db_path"]).expanduser().resolve(), results["db_passwd"])
+            local_id = ctx.add_database(local_db)
+            local_db.local_id = local_id
         except CredentialsError:
            questionary.print("Incorrect credentials", style="bold fg:red")
 
@@ -437,20 +441,56 @@ def connect_database(ctx: ContextApp) -> None:
 
         path = Path(results["db_path"].strip()).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            db_remote = DBRemote.create_and_register(selected_uri, ctx, results["db_passwd"], path)
-            if not db_remote:
-                questionary.print("Something went wrong during the creation of the remote database", style="bold fg:red")
-            else:
-                # There could be a mismatch between the local name given by the leader of the database and the actual exposed name
-                # if the name chosen was already chosen by a mDNS service.
-                db_remote.set_name(selected_display_name.split()[0])
-                ctx.register_ignored_service(selected_uri)
-                ctx.remove_service(choices[selected_display_name][1])
-                ctx.add_database(db_remote)
-        except CommunicationError as e:
-            questionary.print(f"Could not connect to the remote object: {e}", style="bold fg:red")
-        except NamingError as e:
-            questionary.print(f"Problem with name resolution: {e}", style="bold fg:red")
-        finally:
+        db_remote = DBRemote.create_and_register(selected_uri, ctx, results["db_passwd"], path)
+        if not db_remote:
+            questionary.print("Something went wrong during the creation of the remote database", style="bold fg:red")
+        else:
+            # There could be a mismatch between the local name given by the leader of the database and the actual exposed name
+            # if the name chosen was already chosen by a mDNS service.
+            db_remote.set_name(selected_display_name.split()[0])
+            ctx.register_ignored_service(selected_uri)
+            ctx.remove_service(choices[selected_display_name][1])
+            local_id = ctx.add_database(db_remote)
+            db_remote.local_id = local_id
+        return
+    
+def read_notifications(ctx: ContextApp) -> None:
+    if ctx.notifications_counter() <= 0:
+        questionary.print("There are no notifications to read!", style="bold fg:red")
+        return
+
+    for notification in ctx.get_notifications():
+        questionary.print(notification.message)
+    
+    questionary.print("Expired notifications will be deleted", style="bold fg:green")
+    ctx.remove_stale_notifications()
+
+def answer_notification(ctx: ContextApp) -> None:
+    """Prompts the user to select a notification and answers"""
+    notifications = ctx.get_notifications()
+    notifications_messages = {notification.message: idx for idx, notification in enumerate(notifications)}
+
+    if not notifications:
+        questionary.print("There are no notifications!", style="bold fg:red")
+        return
+    
+    while True:
+        selected_notification = questionary.autocomplete(
+            "Start typing to select the notification:",
+            choices=notifications_messages.keys(),
+            ignore_case=True,
+            match_middle=True,
+        ).ask()
+
+        if selected_notification is None:
             return
+        
+        choice = questionary.confirm("Do you approve the change").ask()
+
+        if not choice:
+            return
+        
+        # TODO Send the choice
+
+        ctx.delete_notification(notifications_messages[selected_notification])
+        return

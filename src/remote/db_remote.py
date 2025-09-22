@@ -3,13 +3,14 @@ from base64 import b64decode
 import ipaddress
 import socket
 from Pyro5.core import URI
-from Pyro5.server import Daemon, expose
+from Pyro5.server import Daemon, expose, oneway
 from Pyro5.api import Proxy, current_context
 from Pyro5.errors import CommunicationError, NamingError
 from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
 from context.context import ContextApp
+from .remote_data_structures import Notification, ReturnCode, StatusCode
 
 class DBRemote(DBInterface):
 
@@ -17,11 +18,7 @@ class DBRemote(DBInterface):
         # Try to connect to make sure that the remote object is active.
         leader_uri = URI(leader_uri_str)
         proxy = Proxy(leader_uri)
-        try:
-            proxy._pyroBind() # Forces the connection to the remote object.
-        except Exception as e:
-            print(str(e))
-            return False
+        proxy._pyroBind() # Forces the connection to the remote object.
         self._leader = proxy
         cert = proxy._pyroConnection.sock.getpeercert()
         subject = dict(x[0] for x in cert["subject"])
@@ -30,7 +27,10 @@ class DBRemote(DBInterface):
         self._db_local = None
         self._followers_uris = None # TODO implement access to followers as property
         self._uri = None
+        self._db_path = None
+        self._password = None
         self._ctx = context
+        self._local_id = None
 
     @property
     def uri(self) -> str | None:
@@ -43,74 +43,139 @@ class DBRemote(DBInterface):
         self._uri = value
 
     @property
+    def local_id(self) -> int | None:
+        return self._local_id
+
+    @local_id.setter
+    def local_id(self, value: int) -> None:
+        if self._local_id is not None:
+            raise AttributeError("Local ID has already been set and cannot be modified.")
+        self._local_id = value
+
+    @property
     def leader_uri(self) -> str:
         return self._leader_uri
 
     @classmethod
     def create_and_register(cls, leader_uri: str, context: ContextApp, password: str, path: str) -> Self | None:
+        uri = None
         try:
             remote_db = cls(leader_uri, context)
+            uri = str(context.daemon.register(remote_db))
+            remote_db.uri = uri
+            remote_db._db_path = path
+            remote_db._password = password
+
+            if not remote_db._leader.login(password, uri):
+                context.daemon.unregister(remote_db)
+                return None
+            
+            return remote_db
         except (CommunicationError, NamingError):
+            if uri:
+                context.daemon.unregister(remote_db)
             return None
-
-        uri = str(context.daemon.register(remote_db))
-        remote_db.uri = uri
-
-        if not remote_db._leader.login(password, uri):
-            context.daemon.unregister(remote_db)
-            return None
-        
-        local_db_data = remote_db._leader.send_database()
-        decoded_data = b64decode(local_db_data["data"])
-        with open(path, "wb") as f:
-            f.write(decoded_data)
-        remote_db._db_local = DBLocal(path, password)
-        remote_db._followers_uris = remote_db._leader.send_followers_uris()
-        remote_db._followers_uris.remove(uri)
-        return remote_db
-
     
-    def add_entry(self, destination_group, title, username, passwd) -> bool:
+    def add_entry(self, destination_group: list[str], title: str, username: str, passwd: str) -> bool:
         try:
-            self._leader.add_entry(destination_group, title, username, passwd)
-            self._db_local.add_entry(destination_group, title, username, passwd)
-        except Exception as e:
-            print(f"{e}")
+            return_code, status_code = self._leader.propose_add_entry(destination_group, title, username, passwd, self.uri)
+            return self._process_return_code(return_code, status_code)
+        except (CommunicationError, NamingError):
+            self.print_message("Error when trying to communicate with the leader!")
             return False
-        
-        return True
 
     def add_group(self, parent_group: list[str], group_name: str) -> bool:
         try:
-            self._db_local.add_group(parent_group, group_name)
-        except:
+            return_code, status_code = self._leader.propose_add_group(parent_group, group_name, self.uri)
+            return self._process_return_code(return_code, status_code)
+        except (CommunicationError, NamingError):
+            self.print_message("Error when trying to communicate with the leader!")
             return False
-        return True
     
     def delete_entry(self, entry_path: list[str]) -> bool:
         try:
-            self._db_local.delete_entry(entry_path)
-        except:
+            return_code, status_code = self._leader.propose_delete_entry(entry_path, self.uri)
+            return self._process_return_code(return_code, status_code)
+        except (CommunicationError, NamingError):
+            self.print_message("Error when trying to communicate with the leader!")
             return False
-        return True
     
     def delete_group(self, path: list[str]) -> bool:
         try:
-            self._db_local.delete_group(path)
-        except:
+            return_code, status_code = self._leader.propose_delete_group(path, self.uri)
+            return self._process_return_code(return_code, status_code)
+        except (CommunicationError, NamingError):
+            self.print_message("Error when trying to communicate with the leader!")
             return False
-        return True
+    
+    def _process_return_code(self, return_code: ReturnCode, status_code: StatusCode) -> bool:
+        match return_code:
+            case ReturnCode.OK:
+                self.print_message("The request is being processed by the leader")
+                return True
+            case ReturnCode.ERROR:
+                match status_code:
+                    case StatusCode.DATABASE_CHANGE:
+                        self.print_message("There is already a request being processed")
+                    case StatusCode.FOLLOWER_CHANGE:
+                        self.print_message("Someone is trying to join the database")
+                    case StatusCode.FREE:
+                        self.print_message("The database should be free, try again to request the change")
+                return False
+            case ReturnCode.BANNED:
+                self.print_message("You have been banned!")
+                return False
     
     @expose
     def add_uri(self, uri: str) -> bool:
         if not self._cn_check():
             return False
+        
         self._followers_uris.add(uri)
         self.print_message(f"A new follower was added to database {self.get_name()}")
         return True
     
-    def print_message(self, message: str) -> None:
+    @expose
+    def remove_uris(self, uris: set[str]) -> bool:
+        if not self._cn_check():
+            return False
+        
+        self._followers_uris -= set(uris)
+        self.print_message(f"Dead followers were removed from the database {self.get_name()}")
+        return True
+    
+    @expose
+    def receive_uris(self, uris: set[str]) -> bool:
+        if not self._cn_check():
+            return False
+        self._followers_uris = set(uris) # Necessary cast to set, otherwise the received data is a tuple
+        return True
+
+    @expose
+    def receive_db(self, db_data: bytes) -> bool:
+        if not self._cn_check():
+            return False
+        
+        decoded_data = b64decode(db_data["data"])
+        with open(self._db_path, "wb") as f:
+            f.write(decoded_data)
+        self._db_local = DBLocal(self._db_path, self._password)
+        return True
+    
+    def print_message(self, message: str):
         self._ctx.print_message(message)
+
+    @oneway
+    def remote_print_message(self, message: str) -> None:
+        if self._cn_check():
+            self._ctx.print_message(message)
+
+    @oneway
+    def add_notification(self, message: str, timestamp: float, proposition_id: int) -> None:
+        notification_message = f"- {message} for database {self.get_name()}"
+        self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
+        self.print_message(f"A new notification regarding database {self.get_name()} was added!")
+        
     
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""

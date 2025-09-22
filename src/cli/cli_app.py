@@ -26,13 +26,15 @@ class CLIApp():
                     "List available exposed databases": actions.list_available_dbs,
                     "Share local database": actions.share_database,
                     "Connect to a remote database": actions.connect_database,
+                    "Read notifications": actions.read_notifications,
+                    "Answer notification": actions.answer_notification,
                     "Exit": self._exit_loop,
                     })
 
 
     def run(self) -> None:
         while True:
-            questionary.print(f"\r[Unread notifications]: {self.ctx.notifications_counter()}", style="bold fg:yellow")
+            questionary.print(f"\r[Notifications]: {self.ctx.notifications_counter()}", style="bold fg:yellow")
             action = questionary.select(
                 "What do you want to do?",
                 choices=self.menu_actions.keys()).ask()

@@ -6,6 +6,17 @@ class DBLocal(DBInterface):
 
     def __init__(self, path: str, passwd: str) -> None:
         self._kp_db = PyKeePass(path, passwd)
+        self._local_id = None
+
+    @property
+    def local_id(self) -> int | None:
+        return self._local_id
+
+    @local_id.setter
+    def local_id(self, value: int) -> None:
+        if self._local_id is not None:
+            raise AttributeError("Local ID has already been set and cannot be modified.")
+        self._local_id = value
 
     @classmethod
     def create_db(cls, path: str, passwd: str, name: str) -> Self:

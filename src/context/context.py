@@ -1,12 +1,13 @@
 from collections.abc import ItemsView
 import threading
-from queue import Queue
 from Pyro5.server import Daemon
 import Pyro5.api
 from zeroconf import Zeroconf, ServiceBrowser
 from questionary import print
 from database.db_interface import DBInterface
 from remote.mdns_services import ContinuousListener, UriAdvertiser, SERVICE_TYPE
+from remote.remote_data_structures import Notification, NotificationQueue
+import time
 
 class ContextApp():
     """Context class that holds essential values used by different compontents
@@ -33,16 +34,18 @@ class ContextApp():
         self._advertiser = UriAdvertiser(self._zeroconf, ip, port)
         # Start continuous browsing in background without having to call any method
         self._browser = ServiceBrowser(self._zeroconf, SERVICE_TYPE, self._listener)
-        self._notifications = Queue()
+        self._notifications = NotificationQueue()
+        self.add_notification(Notification("Messagio di prova", time.time(), 34, 1))
 
     def start_daemon_loop(self) -> None:
         """Starts the Pyro5 daemon in a separate thread."""
         threading.Thread(target=self.daemon.requestLoop, daemon=True).start()
 
-    def add_database(self, db: DBInterface) -> None:
-        """Adds a new database to the context and returns its unique ID."""
+    def add_database(self, db: DBInterface) -> int:
+        """Adds a new database to the context and returns its ID."""
         self._counter += 1
         self._dbs[self._counter] = db
+        return self._counter
 
     def remove_database(self, db_id: int) -> DBInterface | None:
         """Removes a database by its ID and returns it."""
@@ -97,11 +100,20 @@ class ContextApp():
     def get_advertiser(self) -> UriAdvertiser:
         return self._advertiser
     
-    def add_notification(self, message: str) -> None:
-        self._notifications.put(message)
+    def add_notification(self, notification: Notification) -> None:
+        self._notifications.push(notification)
     
     def notifications_counter(self) -> int:
-        return self._notifications.qsize()
+        return len(self._notifications)
+    
+    def get_notifications(self) -> list[Notification]:
+        return self._notifications.get_all()
+
+    def delete_notification(self, idx: int) -> None:
+        self._notifications.remove_at(idx)
+
+    def remove_stale_notifications(self) -> None:
+        self._notifications.remove_expired()
     
     def print_message(self, message: str) -> None:
         print(message, style="bold")
