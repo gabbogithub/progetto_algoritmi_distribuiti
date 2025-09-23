@@ -215,8 +215,9 @@ class DBExpose(DBInterface):
                     return
                 
         proposition_id = uuid4().int
-        # TODO Remember to remove the requester (because they are obviously in favor) and also to add a notification for the leader
-        for follower_uri in self._followers_cn:
+        # TODO Remember to remove the requester (because they are obviously in favor)
+        followers_uris = [follower_uri for follower_uri in self._followers_cn.keys() if follower_uri != uri]
+        for follower_uri in followers_uris:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
@@ -224,6 +225,9 @@ class DBExpose(DBInterface):
                     follower_proxy.add_notification(notification_message, time(), proposition_id)
                 except (CommunicationError, NameError):
                     self.print_message(f"Some followers were unreachable during a change proposition for database {self.get_name()}")
+
+        if uri == self.uri:
+            self.add_notification(notification_message, time(), proposition_id)
 
         sleep(30) # Wait for answers
 
