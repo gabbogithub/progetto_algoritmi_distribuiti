@@ -442,9 +442,7 @@ def connect_database(ctx: ContextApp) -> None:
         path = Path(results["db_path"].strip()).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         db_remote = DBRemote.create_and_register(selected_uri, ctx, results["db_passwd"], path)
-        if not db_remote:
-            questionary.print("Something went wrong during the creation of the remote database", style="bold fg:red")
-        else:
+        if db_remote:
             # There could be a mismatch between the local name given by the leader of the database and the actual exposed name
             # if the name chosen was already chosen by a mDNS service.
             db_remote.set_name(selected_display_name.split()[0])

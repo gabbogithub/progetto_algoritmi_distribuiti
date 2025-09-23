@@ -66,11 +66,23 @@ class DBRemote(DBInterface):
             remote_db._db_path = path
             remote_db._password = password
 
-            if not remote_db._leader.login(password, uri):
-                context.daemon.unregister(remote_db)
-                return None
-            
-            return remote_db
+            return_code, _ = remote_db._leader.login(password, uri)
+            return_code = ReturnCode(return_code)
+            match return_code:
+                case ReturnCode.OK:
+                    remote_db.print_message("You have joined the remote database!")
+                    return remote_db
+                case ReturnCode.ERROR:
+                    remote_db.print_message("An error occured while trying to join the remote database!")
+                    context.daemon.unregister(remote_db)
+                    return None
+                case ReturnCode.BANNED:
+                    remote_db.print_message("You have been banned!")
+                    context.daemon.unregister(remote_db)
+                    return None
+                case _:
+                    remote_db.print_message("An unidentified error occured")
+                    return None
         except (CommunicationError, NamingError):
             if uri:
                 context.daemon.unregister(remote_db)
@@ -109,6 +121,8 @@ class DBRemote(DBInterface):
             return False
     
     def _process_return_code(self, return_code: ReturnCode, status_code: StatusCode) -> bool:
+        return_code = ReturnCode(return_code)
+        status_code = StatusCode(status_code)
         match return_code:
             case ReturnCode.OK:
                 self.print_message("The request is being processed by the leader")
@@ -175,7 +189,6 @@ class DBRemote(DBInterface):
         notification_message = f"- {message} for database {self.get_name()}"
         self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
         self.print_message(f"A new notification regarding database {self.get_name()} was added!")
-        
     
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""

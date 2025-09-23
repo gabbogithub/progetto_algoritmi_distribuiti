@@ -1,7 +1,7 @@
 from typing import Self
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from time import time
+from time import time, sleep
 from uuid import uuid4
 from Pyro5.server import Daemon, expose
 from Pyro5.errors import CommunicationError, NamingError
@@ -11,7 +11,7 @@ from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
 from context.context import ContextApp
-from .remote_data_structures import StatusCode, Operation, OperationData, ReturnCode
+from .remote_data_structures import StatusCode, Operation, OperationData, ReturnCode, Notification
 
 class DBExpose(DBInterface):
 
@@ -93,13 +93,15 @@ class DBExpose(DBInterface):
         return set(self._followers_cn.keys())
 
     @expose
-    def login(self, password: str, uri: str) -> bool:
+    def login(self, password: str, uri: str) -> tuple[ReturnCode, StatusCode]:
         """Check if the client knows the password. This allows to modify the shared database"""
-        # TODO Remember to lock the operation and maybe return a return code and status code
+        if not self._lock.acquire(timeout=5):
+            return (ReturnCode.ERROR, self._status)
 
         self._status = StatusCode.FOLLOWER_CHANGE
+
         if not password == self.get_password():
-            return False
+            return (ReturnCode.ERROR, self._status)
         
         caller_cn = self._get_caller_cn()
         client_uri = URI(uri)
@@ -141,22 +143,23 @@ class DBExpose(DBInterface):
             with open(self.get_filename(), "rb") as f:
                 db_data = f.read()
             if not proxy.receive_db(db_data):
-                return False
+                return (ReturnCode.ERROR, self._status)
             if not proxy.receive_uris(set(self._followers_cn.keys())):
-                return False
+                return (ReturnCode.ERROR, self._status)
             proxy._pyroRelease()
         except (CommunicationError, NameError):
-            return False
+            return (ReturnCode.ERROR, self._status)
             
         self._followers_cn[uri] = caller_cn
         self._status = StatusCode.FREE
+        self._lock.release()
     
         if has_failure:
-            self.print_message(f"A client was added to database {self.get_name()} but one of the followers couldn't add them")
+            self.print_message(f"A client was added to database {self.get_name()} but some of the followers couldn't add them")
         else:
             self.print_message(f"A client was added to database {self.get_name()}")
 
-        return True
+        return (ReturnCode.OK, self._status)
     
     @expose
     def propose_add_entry(self, destination_group: list[str], title: str, username: str, passwd: str, uri: str) -> tuple[ReturnCode, StatusCode]:
@@ -211,18 +214,20 @@ class DBExpose(DBInterface):
                     proxy.remote_print_message("The specified operation is not supported")
                     return
                 
-        dead_followers = set()
         proposition_id = uuid4().int
-        timestamp = time()
         # TODO Remember to remove the requester (because they are obviously in favor) and also to add a notification for the leader
         for follower_uri in self._followers_cn:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
                 try:
-                    follower_proxy.add_notification(notification_message, timestamp, proposition_id)
+                    follower_proxy.add_notification(notification_message, time(), proposition_id)
                 except (CommunicationError, NameError):
-                    dead_followers.add(follower_uri)
+                    self.print_message(f"Some followers were unreachable during a change proposition for database {self.get_name()}")
+
+        sleep(30) # Wait for answers
+
+
 
         self._status = StatusCode.FREE
         self._lock.release()
@@ -237,6 +242,15 @@ class DBExpose(DBInterface):
         cert = current_context.client.getpeercert()
         subject = dict(x[0] for x in cert["subject"])
         return subject.get("commonName")
+    
+    @expose
+    def cast_vote(self, vote: bool) -> bool:
+        return True  
+    
+    def add_notification(self, message: str, timestamp: float, proposition_id: int) -> None:
+        notification_message = f"- {message} for database {self.get_name()}"
+        self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
+        self.print_message(f"A new notification regarding database {self.get_name()} was added!")
     
     def print_message(self, message: str) -> None:
         self._ctx.print_message(message)
