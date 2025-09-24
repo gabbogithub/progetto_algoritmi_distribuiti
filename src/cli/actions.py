@@ -488,7 +488,10 @@ def answer_notification(ctx: ContextApp) -> None:
         if not choice:
             return
         
-        # TODO Send the choice
+        notification_id = notifications_messages[selected_notification]
+        notification = notifications[notification_id]
+        db = ctx.get_database(notification.db_id)
+        #if db.answer_notification()
 
         ctx.delete_notification(notifications_messages[selected_notification])
         return

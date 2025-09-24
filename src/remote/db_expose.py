@@ -21,7 +21,9 @@ class DBExpose(DBInterface):
         self._uri = None # leader URI
         self._ctx = context
         self._executor = ThreadPoolExecutor(max_workers=1)
-        self._lock = Lock()
+        self._operation_lock = Lock()
+        self._vote_lock = Lock()
+        self._current_proposal = None
         self._status = StatusCode.FREE
         self._local_id = None
 
@@ -95,7 +97,7 @@ class DBExpose(DBInterface):
     @expose
     def login(self, password: str, uri: str) -> tuple[ReturnCode, StatusCode]:
         """Check if the client knows the password. This allows to modify the shared database"""
-        if not self._lock.acquire(timeout=5):
+        if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
 
         self._status = StatusCode.FOLLOWER_CHANGE
@@ -124,7 +126,9 @@ class DBExpose(DBInterface):
                         dead_followers.add(follower_uri)
 
             # Cleanup dead followers.
-            if len(dead_followers) > 0:
+            while len(dead_followers) > 0:
+                new_dead_followers = set() # Other followers could stop responding, so we delete them too.
+                                           # The loop will eventually end because in the worst case every follower is removed.
                 for dead_follower in dead_followers:
                     del self._followers_cn[dead_follower]
     
@@ -134,11 +138,8 @@ class DBExpose(DBInterface):
                         try:
                             follower_proxy.remove_uris(dead_followers)
                         except (CommunicationError, NameError):
-                            # If one the remaining followers stops responding it's fine
-                            # because they are synchronised with respect to the active followers
-                            # and will be removed in the future if they remain unresponsive.
-                            # They will undestand on their own that the dead follower is unresponsive.
-                            pass
+                            new_dead_followers.add(follower_uri)
+                dead_followers = new_dead_followers
 
             with open(self.get_filename(), "rb") as f:
                 db_data = f.read()
@@ -152,7 +153,7 @@ class DBExpose(DBInterface):
             
         self._followers_cn[uri] = caller_cn
         self._status = StatusCode.FREE
-        self._lock.release()
+        self._operation_lock.release()
     
         if has_failure:
             self.print_message(f"A client was added to database {self.get_name()} but some of the followers couldn't add them")
@@ -163,7 +164,8 @@ class DBExpose(DBInterface):
     
     @expose
     def propose_add_entry(self, destination_group: list[str], title: str, username: str, passwd: str, uri: str) -> tuple[ReturnCode, StatusCode]:
-        if not self._lock.acquire(timeout=5):
+        # Remember to check if the requester is in the cn list.
+        if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
         self._status = StatusCode.DATABASE_CHANGE
@@ -172,7 +174,7 @@ class DBExpose(DBInterface):
     
     @expose
     def propose_add_group(self, parent_group: list[str], group_name: str, uri: str) -> tuple[ReturnCode, StatusCode]:
-        if not self._lock.acquire(timeout=5):
+        if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
         self._status = StatusCode.DATABASE_CHANGE
@@ -181,7 +183,7 @@ class DBExpose(DBInterface):
 
     @expose
     def propose_delete_entry(self, entry_path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
-        if not self._lock.acquire(timeout=5):
+        if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
         self._status = StatusCode.DATABASE_CHANGE
@@ -190,7 +192,7 @@ class DBExpose(DBInterface):
 
     @expose
     def propose_delete_group(self, path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
-        if not self._lock.acquire(timeout=5):
+        if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
         self._status = StatusCode.DATABASE_CHANGE
@@ -198,6 +200,8 @@ class DBExpose(DBInterface):
         return (ReturnCode.OK, self._status)
     
     def propose_change(self, operation: Operation, data: OperationData, uri: str) -> None:
+        # Maybe add a flag inside every db remote after they receive the notification or a version number in order to understand if someone is in un inconsistent state when the leader
+        # closes the exposed db while a change request is taking place.
         notification_message = ""
         match operation:
             case Operation.ADD_ENTRY:
@@ -216,7 +220,12 @@ class DBExpose(DBInterface):
                 
         proposition_id = uuid4().int
         # TODO Remember to remove the requester (because they are obviously in favor)
-        followers_uris = [follower_uri for follower_uri in self._followers_cn.keys() if follower_uri != uri]
+        self._current_proposal = {
+                    "votes": [],
+                    "voters": set(),
+                    "deadlines": None
+                }
+        followers_uris = (follower_uri for follower_uri in self._followers_cn.keys() if follower_uri != uri)
         for follower_uri in followers_uris:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
@@ -224,17 +233,16 @@ class DBExpose(DBInterface):
                 try:
                     follower_proxy.add_notification(notification_message, time(), proposition_id)
                 except (CommunicationError, NameError):
-                    self.print_message(f"Some followers were unreachable during a change proposition for database {self.get_name()}")
+                    self.print_message(f"A follower was unreachable during a change proposition for database {self.get_name()}")
 
-        if uri == self.uri:
+        if uri != self.uri:
             self.add_notification(notification_message, time(), proposition_id)
-
+        
         sleep(30) # Wait for answers
 
-
-
         self._status = StatusCode.FREE
-        self._lock.release()
+        self._current_proposal = None
+        self._operation_lock.release()
         
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""

@@ -189,6 +189,9 @@ class DBRemote(DBInterface):
         notification_message = f"- {message} for database {self.get_name()}"
         self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
         self.print_message(f"A new notification regarding database {self.get_name()} was added!")
+
+    def answer_notification(self, answer: bool, timestamp: float, proposition_id: int) -> bool:
+        pass
     
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""
