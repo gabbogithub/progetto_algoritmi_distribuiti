@@ -490,6 +490,6 @@ def answer_notification(ctx: ContextApp) -> None:
             questionary.print("The vote was cast", style="bold")
             ctx.delete_notification(notifications_messages[selected_notification])
         else:
-            questionary.print("There was a problem during the voting process", style="boold fg:red")
+            questionary.print("There was a problem during the voting process", style="bold fg:red")
 
         return

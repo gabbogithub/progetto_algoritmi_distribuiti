@@ -49,38 +49,60 @@ class DBExpose(DBInterface):
         obj.uri = str(uri)
         return obj
     
-    @expose
     def add_entry(self, destination_group: list[str], title: str, username: str, passwd: str) -> bool:
-        try:
-            self._db_local.add_entry(destination_group, title, username, passwd)
-        except:
+        if not self._operation_lock.acquire(timeout=5):
+            self._process_status_code(self._status, False)
             return False
         
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.ADD_ENTRY, {"destination_group": destination_group, "title": title, "username": username, "passwd": passwd}, self.uri)
+        self._process_status_code(self._status, True)
         return True
 
-    @expose
     def add_group(self, parent_group: list[str], group_name: str) -> bool:
-        try:
-            self._db_local.add_group(parent_group, group_name)
-        except:
+        if not self._operation_lock.acquire(timeout=5):
+            self._process_status_code(self._status, False)
             return False
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.ADD_GROUP, {"parent_group": parent_group, "group_name": group_name}, self.uri)
+        self._process_status_code(self._status, True)
+   
         return True
     
-    @expose
     def delete_entry(self, entry_path: list[str]) -> bool:
-        try:
-            self._db_local.delete_entry(entry_path)
-        except:
+        if not self._operation_lock.acquire(timeout=5):
+            self._process_status_code(self._status, False)
             return False
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.DELETE_ENTRY, {"entry_path": entry_path}, self.uri)
+        self._process_status_code(self._status, True)
+
         return True
     
-    @expose
     def delete_group(self, path: list[str]) -> bool:
-        try:
-            self._db_local.delete_group(path)
-        except:
+        if not self._operation_lock.acquire(timeout=5):
+            self._process_status_code(self._status, False)
             return False
+        
+        self._status = StatusCode.DATABASE_CHANGE
+        self._executor.submit(self.propose_change, Operation.DELETE_GROUP, {"path": path}, self.uri)
+        self._process_status_code(self._status, True)
+        
         return True
+    
+    def _process_status_code(self, status_code: StatusCode, lock_acquired: bool) -> None:
+        if lock_acquired:
+            self.print_message("You request is being processed")
+        else:
+            match status_code:
+                case StatusCode.FOLLOWER_CHANGE:
+                    self.print_message("I was unable to proceed with the request because someone is trying to join the database")
+                case StatusCode.DATABASE_CHANGE:
+                    self.print_message("I was unable to proceed with the request because there is already a pending request")
+                case StatusCode.FREE:
+                    self.print_message("I was unable to proceed with the request but the database should be free, try again")
     
     @expose
     def send_database(self) -> bytes | None:
