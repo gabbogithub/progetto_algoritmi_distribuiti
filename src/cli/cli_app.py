@@ -21,7 +21,6 @@ class CLIApp():
                     "Add entry": actions.add_entry,
                     "Delete group": actions.delete_group,
                     "Delete entry": actions.delete_entry,
-                    "Save changes": actions.save_changes,
                     "Close database": actions.close_db,
                     "List available exposed databases": actions.list_available_dbs,
                     "Share local database": actions.share_database,

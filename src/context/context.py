@@ -101,6 +101,7 @@ class ContextApp():
     
     def add_notification(self, notification: Notification) -> None:
         self._notifications.push(notification)
+        print(f"[Notifications]: {self.notifications_counter()}", style="bold fg:yellow")
     
     def notifications_counter(self) -> int:
         return len(self._notifications)

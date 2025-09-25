@@ -37,6 +37,7 @@ class DBLocal(DBInterface):
             raise KeyError("The entry under the specified group, with the specified title already exists!")
         
         self._kp_db.add_entry(group, title, username, passwd)
+        self._kp_db.save()
 
     def add_group(self, parent_group: list[str], group_name: str) -> None:
         parent = self._kp_db.find_groups(path=parent_group, first=True)
@@ -48,6 +49,7 @@ class DBLocal(DBInterface):
             raise ValueError("The group is already present in the parent group!")
 
         self._kp_db.add_group(parent, group_name) 
+        self._kp_db.save()
 
     def delete_entry(self, entry_path: list[str]) -> None:
         entry = self._kp_db.find_entries(path=entry_path, first=True)
@@ -55,6 +57,7 @@ class DBLocal(DBInterface):
             raise KeyError("The entry doesn't exist!")
 
         self._kp_db.delete_entry(entry)
+        self._kp_db.save()
 
     def delete_group(self, path: list[str]) -> None:
         group = self._kp_db.find_groups(path=path, first=True) 
@@ -62,9 +65,11 @@ class DBLocal(DBInterface):
             raise KeyError("The group doesn't exist!")
 
         self._kp_db.delete_group(group)
+        self._kp_db.save()
     
     def set_name(self, name: str) -> None:
         self._kp_db.database_name = name
+        self._kp_db.save()
     
     def get_name(self) -> str:
         return self._kp_db.database_name
@@ -81,5 +86,3 @@ class DBLocal(DBInterface):
     def get_groups(self) -> list[Group]:
         return self._kp_db.groups
     
-    def save_changes(self) -> None:
-        self._kp_db.save()

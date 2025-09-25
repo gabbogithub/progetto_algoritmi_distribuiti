@@ -180,11 +180,13 @@ class DBRemote(DBInterface):
     def print_message(self, message: str):
         self._ctx.print_message(message)
 
+    @expose
     @oneway
     def remote_print_message(self, message: str) -> None:
         if self._cn_check():
             self._ctx.print_message(message)
 
+    @expose
     @oneway
     def add_notification(self, message: str, timestamp: float, proposition_id: int) -> None:
         notification_message = f"- {message} for database {self.get_name()}"
@@ -195,32 +197,46 @@ class DBRemote(DBInterface):
     def remote_add_entry(self, data: OperationData) -> bool:
         if not self._cn_check():
             return False
-        self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
-        self.print_message(f"A new entry was added to database {self.get_name()}")
+        try:
+            self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
+            self.print_message(f"A new entry was added to database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to add a new entry to database {self.get_name()}")
+            return False
         return True
     
     @expose
     def remote_add_group(self, data: OperationData) -> bool:
         if not self._cn_check():
             return False
-        self._db_local.add_group(data["parent_group"], data["group_name"])
-        self.print_message(f"A new group was added to database {self.get_name()}")
+        try:
+            self._db_local.add_group(data["parent_group"], data["group_name"])
+            self.print_message(f"A new group was added to database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to add a new group to database {self.get_name()}")
+            return False
         return True
     
     @expose
     def remote_delete_entry(self, data: OperationData) -> bool:
         if not self._cn_check():
             return False
-        self._db_local.delete_entry(data["entry_path"])
-        self.print_message(f"An entry was deleted from database {self.get_name()}")
+        try:
+            self._db_local.delete_entry(data["entry_path"])
+            self.print_message(f"An entry was deleted from database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to delete an entry of database {self.get_name()}")
         return True
     
     @expose
     def remote_delete_group(self, data: OperationData) -> bool:
         if not self._cn_check():
             return False
-        self._db_local.delete_group(data["path"])
-        self.print_message(f"A group was deleted from database {self.get_name()}")
+        try:
+            self._db_local.delete_group(data["path"])
+            self.print_message(f"A group was deleted from database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to delete a group of database {self.get_name()}")
         return True
 
     def answer_notification(self, vote: bool, notification: Notification) -> bool:
@@ -258,5 +274,3 @@ class DBRemote(DBInterface):
     def get_groups(self) -> list[Group]:
         return self._db_local.get_groups()
     
-    def save_changes(self) -> None:
-        self._db_local.save_changes()

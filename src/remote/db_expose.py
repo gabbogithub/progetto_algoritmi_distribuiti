@@ -24,7 +24,7 @@ class DBExpose(DBInterface):
         self._operation_lock = Lock()
         self._vote_lock = Lock()
         self._followers_lock = Lock()
-        self._current_proposal = None
+        self._current_proposition = None
         self._status = StatusCode.FREE
         self._local_id = None
 
@@ -133,6 +133,7 @@ class DBExpose(DBInterface):
                 with self._followers_lock:
                     for dead_follower in dead_followers:
                         del self._followers_cn[dead_follower]
+                    self.print_message(f"Dead followers were removed from database {self.get_name()}")
     
                 for follower_uri in self._followers_cn:
                     with Proxy(URI(follower_uri)) as follower_proxy:
@@ -167,7 +168,9 @@ class DBExpose(DBInterface):
     
     @expose
     def propose_add_entry(self, destination_group: list[str], title: str, username: str, passwd: str, uri: str) -> tuple[ReturnCode, StatusCode]:
-        # Remember to check if the requester is in the cn list.
+        if not self._cn_check():
+            return (ReturnCode.ERROR, self._status)
+        
         if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
@@ -177,6 +180,9 @@ class DBExpose(DBInterface):
     
     @expose
     def propose_add_group(self, parent_group: list[str], group_name: str, uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._cn_check():
+            return (ReturnCode.ERROR, self._status)
+
         if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
@@ -186,6 +192,9 @@ class DBExpose(DBInterface):
 
     @expose
     def propose_delete_entry(self, entry_path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._cn_check():
+            return (ReturnCode.ERROR, self._status)
+
         if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
@@ -195,6 +204,9 @@ class DBExpose(DBInterface):
 
     @expose
     def propose_delete_group(self, path: list[str], uri: str) -> tuple[ReturnCode, StatusCode]:
+        if not self._cn_check():
+            return (ReturnCode.ERROR, self._status)
+
         if not self._operation_lock.acquire(timeout=5):
             return (ReturnCode.ERROR, self._status)
         
@@ -203,7 +215,6 @@ class DBExpose(DBInterface):
         return (ReturnCode.OK, self._status)
     
     def propose_change(self, operation: Operation, data: OperationData, uri: str) -> None:
-        print("Inizio esecuzione")
         notification_message = ""
         match operation:
             case Operation.ADD_ENTRY:
@@ -222,13 +233,14 @@ class DBExpose(DBInterface):
                 
         proposition_id = uuid4().int
         with self._vote_lock:
-            self._current_proposal = {
+            self._current_proposition = {
                         "votes": [True],
                         "voters": {uri},
-                        "deadlines": None,
+                        "deadlines": {},
                         "proposition_id": proposition_id
                     }
         followers_uris = (follower_uri for follower_uri in self._followers_cn.keys() if follower_uri != uri)
+
         for follower_uri in followers_uris:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
@@ -237,26 +249,28 @@ class DBExpose(DBInterface):
                     follower_proxy._pyroBind()
                     with self._vote_lock:
                         deadline = time() + 30
-                        self._current_proposal["deadlines"][follower_uri] = deadline
+                        self._current_proposition["deadlines"][follower_uri] = deadline
                     follower_proxy.add_notification(notification_message, deadline, proposition_id)
                 except (CommunicationError, NameError):
                     self.print_message(f"A follower was unreachable during a change proposition for database {self.get_name()}")
+                except Exception as e:
+                    print(e)
 
         if uri != self.uri:
             deadline = time() + 30
             with self._vote_lock:
-                self._current_proposal["deadlines"][self.uri] = deadline
+                self._current_proposition["deadlines"][self.uri] = deadline
             self.add_notification(notification_message, deadline, proposition_id)
         
-        sleep(30) # Wait for answers
+        sleep(20) # Wait for answers
 
         # The decision is approved if at least the ceiling half the followers + leader has approved the change.
         # - ( (-n1) // n2) is a trick to perform a ceiling division instead of a floor division.
-        decision = True if sum(self._current_proposal["votes"]) > -( (-(len(self._followers_cn)+1)) // 2) else False
-        decision_message_template = f"Database change {notification_message} has been "
+        decision = True if sum(self._current_proposition["votes"]) >= -( (-(len(self._followers_cn)+1)) // 2) else False
+        decision_message_template = f"Database change \'{notification_message}\' has been "
         decision_message = decision_message_template + "approved" if decision else decision_message_template + "denied"
 
-        for follower_uri in followers_uris:
+        for follower_uri in self._followers_cn:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
@@ -264,6 +278,10 @@ class DBExpose(DBInterface):
                     follower_proxy.remote_print_message(decision_message)
                 except (CommunicationError, NameError):
                     pass
+                except Exception as e:
+                    print(e)
+        
+        self.print_message(decision_message)
 
         if decision:
             dead_followers = set()
@@ -283,7 +301,7 @@ class DBExpose(DBInterface):
                     follower_method = "remote_delete_group"
                     leader_method = "local_delete_group"
             
-            for follower_uri in followers_uris:
+            for follower_uri in self._followers_cn:
                 with Proxy(URI(follower_uri)) as follower_proxy:
                     follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                       # otherwise the follower is overwhelmed with connections and can't respond.
@@ -307,6 +325,7 @@ class DBExpose(DBInterface):
                 with self._followers_lock:
                     for dead_follower in dead_followers:
                         del self._followers_cn[dead_follower]
+                    self.print_message(f"Dead followers were removed from database {self.get_name()}")
     
                 for follower_uri in self._followers_cn:
                     with Proxy(URI(follower_uri)) as follower_proxy:
@@ -319,25 +338,37 @@ class DBExpose(DBInterface):
 
         self._status = StatusCode.FREE
         with self._vote_lock:
-            self._current_proposal = None
+            self._current_proposition = None
         self._operation_lock.release()
 
     def local_add_entry(self, data: OperationData) -> None:
         # Add a try catch because the approved change could raise an exception if ill-formed
-        self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
-        self.print_message(f"A new entry was added to database {self.get_name()}")
+        try:
+            self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
+            self.print_message(f"A new entry was added to database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to add a new entry to database {self.get_name()}")
     
     def local_add_group(self, data: OperationData) -> None:
-        self._db_local.add_group(data["parent_group"], data["group_name"])
-        self.print_message(f"A new group was added to database {self.get_name()}")
+        try:
+            self._db_local.add_group(data["parent_group"], data["group_name"])
+            self.print_message(f"A new group was added to database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to add a new group to database {self.get_name()}")
     
     def local_delete_entry(self, data: OperationData) -> None:
-        self._db_local.delete_entry(data["entry_path"])
-        self.print_message(f"An entry was deleted from database {self.get_name()}")
+        try:
+            self._db_local.delete_entry(data["entry_path"])
+            self.print_message(f"An entry was deleted from database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to delete an entry of database {self.get_name()}")
     
     def local_delete_group(self, data: OperationData) -> None:
-        self._db_local.delete_group(data["path"])
-        self.print_message(f"A group was deleted from database {self.get_name()}")
+        try:
+            self._db_local.delete_group(data["path"])
+            self.print_message(f"A group was deleted from database {self.get_name()}")
+        except Exception:
+            self.print_message(f"An error occured while trying to delete a group of database {self.get_name()}")
 
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""
@@ -352,26 +383,40 @@ class DBExpose(DBInterface):
         return subject.get("commonName")
     
     @expose
-    def cast_vote(self, vote: bool, uri: str, proposal_id: int) -> bool:
+    def cast_vote(self, vote: bool, uri: str, proposition_id: int) -> bool:
         if not self._cn_check():
             return False
         with self._vote_lock:
             if (
-                not self._current_proposal
-                or self._current_proposal["proposal_id"] != proposal_id
-                or self._get_caller_cn() in self._current_proposal["voters"]
-                or time() > self._current_proposal["deadlines"][uri]
+                not self._current_proposition
+                or self._current_proposition["proposition_id"] != proposition_id
+                or self._get_caller_cn() in self._current_proposition["voters"]
+                or time() > self._current_proposition["deadlines"][uri]
             ):
                 return False
 
-            self._current_proposal["voters"].add(self._get_caller_cn())
-            self._current_proposal["votes"].append(vote)
+            self._current_proposition["voters"].add(self._get_caller_cn())
+            self._current_proposition["votes"].append(vote)
         return True
     
     def add_notification(self, message: str, timestamp: float, proposition_id: int) -> None:
         notification_message = f"- {message} for database {self.get_name()}"
         self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
         self.print_message(f"A new notification regarding database {self.get_name()} was added!")
+
+    def answer_notification(self, vote: bool, notification: Notification) -> bool:
+        with self._vote_lock:
+            if (
+                not self._current_proposition
+                or self._current_proposition["proposition_id"] != notification.proposition_id
+                or "leader" in self._current_proposition["voters"]
+                or time() > self._current_proposition["deadlines"][self.uri]
+            ):
+                return False
+
+            self._current_proposition["voters"].add("leader")
+            self._current_proposition["votes"].append(vote)
+        return True
     
     def print_message(self, message: str) -> None:
         self._ctx.print_message(message)
@@ -388,12 +433,8 @@ class DBExpose(DBInterface):
     def get_filename(self) -> str:
         return self._db_local.get_filename()
     
-    
     def get_entries(self) -> list[Entry]:
         return self._db_local.get_entries()
     
     def get_groups(self) -> list[Group]:
         return self._db_local.get_groups()
-    
-    def save_changes(self) -> None:
-        self._db_local.save_changes()

@@ -99,8 +99,8 @@ def database_selection(ctx: ContextApp) -> int:
         # User cancelled the operation
             return -1
         
-        selected_id = choices[selected_display_name]
-
+        selected_id = choices.get(selected_display_name, -1)
+        
         confirmation = questionary.confirm(f"You selected '{selected_display_name}'. Is this correct?").ask()
 
         if confirmation:
@@ -329,14 +329,6 @@ def delete_entry(ctx: ContextApp) -> None:
         # TODO check that other errors may be raised, especially by remote dabatases.
         questionary.print(f"{e}", style="bold fg:red")
 
-def save_changes(ctx: ContextApp) -> None:
-    idx = database_selection(ctx)
-    db = ctx.get_database(idx)
-    if not db:
-        return
-    
-    db.save_changes()
-
 def close_db(ctx: ContextApp) -> None:
     # TODO add logic to handle the transition from online to offline database
     idx = database_selection(ctx)
@@ -491,6 +483,9 @@ def answer_notification(ctx: ContextApp) -> None:
         notification_id = notifications_messages[selected_notification]
         notification = notifications[notification_id]
         db = ctx.get_database(notification.db_id)
+        if isinstance(db, DBLocal):
+            questionary.print("The selected notification belongs to a database that right now is local", style="bold fg:red")
+            return
         if db.answer_notification(choice, notification):
             questionary.print("The vote was cast", style="bold")
             ctx.delete_notification(notifications_messages[selected_notification])

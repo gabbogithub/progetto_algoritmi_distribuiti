@@ -38,7 +38,3 @@ class DBInterface(ABC):
     @abstractmethod
     def get_groups(self) -> list[Group]:
         pass
-    
-    @abstractmethod
-    def save_changes(self) -> None:
-        pass
