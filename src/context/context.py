@@ -35,7 +35,6 @@ class ContextApp():
         # Start continuous browsing in background without having to call any method
         self._browser = ServiceBrowser(self._zeroconf, SERVICE_TYPE, self._listener)
         self._notifications = NotificationQueue()
-        self.add_notification(Notification("Messagio di prova", time.time(), 34, 1))
 
     def start_daemon_loop(self) -> None:
         """Starts the Pyro5 daemon in a separate thread."""

@@ -1,5 +1,6 @@
 from typing import Self
 from base64 import b64decode
+from time import time
 import ipaddress
 import socket
 from Pyro5.core import URI
@@ -10,7 +11,7 @@ from pykeepass import Entry, Group
 from database.db_interface import DBInterface
 from database.db_local import DBLocal
 from context.context import ContextApp
-from .remote_data_structures import Notification, ReturnCode, StatusCode
+from .remote_data_structures import Notification, ReturnCode, StatusCode, OperationData
 
 class DBRemote(DBInterface):
 
@@ -190,8 +191,42 @@ class DBRemote(DBInterface):
         self._ctx.add_notification(Notification(notification_message, timestamp, proposition_id, self.local_id))
         self.print_message(f"A new notification regarding database {self.get_name()} was added!")
 
-    def answer_notification(self, answer: bool, timestamp: float, proposition_id: int) -> bool:
-        pass
+    @expose
+    def remote_add_entry(self, data: OperationData) -> bool:
+        if not self._cn_check():
+            return False
+        self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
+        self.print_message(f"A new entry was added to database {self.get_name()}")
+        return True
+    
+    @expose
+    def remote_add_group(self, data: OperationData) -> bool:
+        if not self._cn_check():
+            return False
+        self._db_local.add_group(data["parent_group"], data["group_name"])
+        self.print_message(f"A new group was added to database {self.get_name()}")
+        return True
+    
+    @expose
+    def remote_delete_entry(self, data: OperationData) -> bool:
+        if not self._cn_check():
+            return False
+        self._db_local.delete_entry(data["entry_path"])
+        self.print_message(f"An entry was deleted from database {self.get_name()}")
+        return True
+    
+    @expose
+    def remote_delete_group(self, data: OperationData) -> bool:
+        if not self._cn_check():
+            return False
+        self._db_local.delete_group(data["path"])
+        self.print_message(f"A group was deleted from database {self.get_name()}")
+        return True
+
+    def answer_notification(self, vote: bool, notification: Notification) -> bool:
+        if time() > notification.timestamp:
+            return False
+        return self._leader.cast_vote(vote, self.uri, notification.proposition_id)
     
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""

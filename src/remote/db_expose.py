@@ -23,6 +23,7 @@ class DBExpose(DBInterface):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._operation_lock = Lock()
         self._vote_lock = Lock()
+        self._followers_lock = Lock()
         self._current_proposal = None
         self._status = StatusCode.FREE
         self._local_id = None
@@ -129,8 +130,9 @@ class DBExpose(DBInterface):
             while len(dead_followers) > 0:
                 new_dead_followers = set() # Other followers could stop responding, so we delete them too.
                                            # The loop will eventually end because in the worst case every follower is removed.
-                for dead_follower in dead_followers:
-                    del self._followers_cn[dead_follower]
+                with self._followers_lock:
+                    for dead_follower in dead_followers:
+                        del self._followers_cn[dead_follower]
     
                 for follower_uri in self._followers_cn:
                     with Proxy(URI(follower_uri)) as follower_proxy:
@@ -151,7 +153,8 @@ class DBExpose(DBInterface):
         except (CommunicationError, NameError):
             return (ReturnCode.ERROR, self._status)
             
-        self._followers_cn[uri] = caller_cn
+        with self._followers_lock:
+            self._followers_cn[uri] = caller_cn
         self._status = StatusCode.FREE
         self._operation_lock.release()
     
@@ -200,8 +203,7 @@ class DBExpose(DBInterface):
         return (ReturnCode.OK, self._status)
     
     def propose_change(self, operation: Operation, data: OperationData, uri: str) -> None:
-        # Maybe add a flag inside every db remote after they receive the notification or a version number in order to understand if someone is in un inconsistent state when the leader
-        # closes the exposed db while a change request is taking place.
+        print("Inizio esecuzione")
         notification_message = ""
         match operation:
             case Operation.ADD_ENTRY:
@@ -219,35 +221,129 @@ class DBExpose(DBInterface):
                     return
                 
         proposition_id = uuid4().int
-        # TODO Remember to remove the requester (because they are obviously in favor)
-        self._current_proposal = {
-                    "votes": [],
-                    "voters": set(),
-                    "deadlines": None
-                }
+        with self._vote_lock:
+            self._current_proposal = {
+                        "votes": [True],
+                        "voters": {uri},
+                        "deadlines": None,
+                        "proposition_id": proposition_id
+                    }
         followers_uris = (follower_uri for follower_uri in self._followers_cn.keys() if follower_uri != uri)
         for follower_uri in followers_uris:
             with Proxy(URI(follower_uri)) as follower_proxy:
                 follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
                 try:
-                    follower_proxy.add_notification(notification_message, time(), proposition_id)
+                    follower_proxy._pyroBind()
+                    with self._vote_lock:
+                        deadline = time() + 30
+                        self._current_proposal["deadlines"][follower_uri] = deadline
+                    follower_proxy.add_notification(notification_message, deadline, proposition_id)
                 except (CommunicationError, NameError):
                     self.print_message(f"A follower was unreachable during a change proposition for database {self.get_name()}")
 
         if uri != self.uri:
-            self.add_notification(notification_message, time(), proposition_id)
+            deadline = time() + 30
+            with self._vote_lock:
+                self._current_proposal["deadlines"][self.uri] = deadline
+            self.add_notification(notification_message, deadline, proposition_id)
         
         sleep(30) # Wait for answers
 
+        # The decision is approved if at least the ceiling half the followers + leader has approved the change.
+        # - ( (-n1) // n2) is a trick to perform a ceiling division instead of a floor division.
+        decision = True if sum(self._current_proposal["votes"]) > -( (-(len(self._followers_cn)+1)) // 2) else False
+        decision_message_template = f"Database change {notification_message} has been "
+        decision_message = decision_message_template + "approved" if decision else decision_message_template + "denied"
+
+        for follower_uri in followers_uris:
+            with Proxy(URI(follower_uri)) as follower_proxy:
+                follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
+                                                  # otherwise the follower is overwhelmed with connections and can't respond.
+                try:
+                    follower_proxy.remote_print_message(decision_message)
+                except (CommunicationError, NameError):
+                    pass
+
+        if decision:
+            dead_followers = set()
+            follower_method = None
+            leader_method = None
+            match operation:
+                case Operation.ADD_ENTRY:
+                    follower_method = "remote_add_entry"
+                    leader_method = "local_add_entry"
+                case Operation.ADD_GROUP:
+                    follower_method = "remote_add_group"
+                    leader_method = "local_add_group"
+                case Operation.DELETE_ENTRY:
+                    follower_method = "remote_delete_entry"
+                    leader_method = "local_delete_entry"
+                case Operation.DELETE_GROUP:
+                    follower_method = "remote_delete_group"
+                    leader_method = "local_delete_group"
+            
+            for follower_uri in followers_uris:
+                with Proxy(URI(follower_uri)) as follower_proxy:
+                    follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
+                                                      # otherwise the follower is overwhelmed with connections and can't respond.
+                    try:
+                        method = getattr(follower_proxy, follower_method)
+                        method(data)
+                    except (CommunicationError, NameError):
+                        dead_followers.add(follower_uri)
+                    except AttributeError:
+                        self.print_message("I tried to call a method that doesn't exist on the client")
+
+            try:
+                method = getattr(self, leader_method)
+                method(data)
+            except AttributeError:
+                self.print_message("I tried to call a method that doesn't exist on the leader")
+
+            # Cleanup dead followers.
+            while len(dead_followers) > 0:
+                new_dead_followers = set()
+                with self._followers_lock:
+                    for dead_follower in dead_followers:
+                        del self._followers_cn[dead_follower]
+    
+                for follower_uri in self._followers_cn:
+                    with Proxy(URI(follower_uri)) as follower_proxy:
+                        follower_proxy._pyroTimeout = 5.0
+                        try:
+                            follower_proxy.remove_uris(dead_followers)
+                        except (CommunicationError, NameError):
+                            new_dead_followers.add(follower_uri)
+                dead_followers = new_dead_followers
+
         self._status = StatusCode.FREE
-        self._current_proposal = None
+        with self._vote_lock:
+            self._current_proposal = None
         self._operation_lock.release()
-        
+
+    def local_add_entry(self, data: OperationData) -> None:
+        # Add a try catch because the approved change could raise an exception if ill-formed
+        self._db_local.add_entry(data["destination_group"], data["title"], data["username"], data["passwd"])
+        self.print_message(f"A new entry was added to database {self.get_name()}")
+    
+    def local_add_group(self, data: OperationData) -> None:
+        self._db_local.add_group(data["parent_group"], data["group_name"])
+        self.print_message(f"A new group was added to database {self.get_name()}")
+    
+    def local_delete_entry(self, data: OperationData) -> None:
+        self._db_local.delete_entry(data["entry_path"])
+        self.print_message(f"An entry was deleted from database {self.get_name()}")
+    
+    def local_delete_group(self, data: OperationData) -> None:
+        self._db_local.delete_group(data["path"])
+        self.print_message(f"A group was deleted from database {self.get_name()}")
+
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""
         client_cn = self._get_caller_cn()
-        return client_cn in self._followers_cn.values()
+        with self._followers_lock:
+            return client_cn in self._followers_cn.values()
     
     def _get_caller_cn(self) -> str:
         """Return the Common Name of the caller"""
@@ -256,8 +352,21 @@ class DBExpose(DBInterface):
         return subject.get("commonName")
     
     @expose
-    def cast_vote(self, vote: bool) -> bool:
-        return True  
+    def cast_vote(self, vote: bool, uri: str, proposal_id: int) -> bool:
+        if not self._cn_check():
+            return False
+        with self._vote_lock:
+            if (
+                not self._current_proposal
+                or self._current_proposal["proposal_id"] != proposal_id
+                or self._get_caller_cn() in self._current_proposal["voters"]
+                or time() > self._current_proposal["deadlines"][uri]
+            ):
+                return False
+
+            self._current_proposal["voters"].add(self._get_caller_cn())
+            self._current_proposal["votes"].append(vote)
+        return True
     
     def add_notification(self, message: str, timestamp: float, proposition_id: int) -> None:
         notification_message = f"- {message} for database {self.get_name()}"
