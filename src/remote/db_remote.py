@@ -1,8 +1,6 @@
 from typing import Self
 from base64 import b64decode
 from time import time
-import ipaddress
-import socket
 from Pyro5.core import URI
 from Pyro5.server import Daemon, expose, oneway
 from Pyro5.api import Proxy, current_context
@@ -26,12 +24,13 @@ class DBRemote(DBInterface):
         self._leader_cn = subject.get("commonName")
         self._leader_uri = leader_uri_str
         self._db_local = None
-        self._followers_uris = None # TODO implement access to followers as property
+        self._followers_uris = {} # dictionary with the URIs and IDs of the other followers
         self._uri = None
         self._db_path = None
         self._password = None
         self._ctx = context
-        self._local_id = None
+        self._local_id = None # ID assigned by the context class
+        self._unique_id = None # ID assigned by the leader
 
     @property
     def uri(self) -> str | None:
@@ -52,6 +51,17 @@ class DBRemote(DBInterface):
         if self._local_id is not None:
             raise AttributeError("Local ID has already been set and cannot be modified.")
         self._local_id = value
+        self._db_local.local_id = value
+
+    @property
+    def unique_id(self) -> int | None:
+        return self._unique_id
+
+    @unique_id.setter
+    def unique_id(self, value: int) -> None:
+        if self._unique_id is not None:
+            raise AttributeError("Unique ID has already been set and cannot be modified.")
+        self._unique_id = value
 
     @property
     def leader_uri(self) -> str:
@@ -142,11 +152,11 @@ class DBRemote(DBInterface):
                 return False
     
     @expose
-    def add_uri(self, uri: str) -> bool:
+    def add_uri_id(self, uri: str, unique_id: int) -> bool:
         if not self._cn_check():
             return False
         
-        self._followers_uris.add(uri)
+        self._followers_uris[uri] = unique_id
         self.print_message(f"A new follower was added to database {self.get_name()}")
         return True
     
@@ -155,15 +165,18 @@ class DBRemote(DBInterface):
         if not self._cn_check():
             return False
         
-        self._followers_uris -= set(uris)
-        self.print_message(f"Dead followers were removed from the database {self.get_name()}")
+        before_len = len(self._followers_uris)
+        for uri in uris:
+            self._followers_uris.pop(uri, None)
+        if before_len != len(self._followers_uris):
+            self.print_message(f"Some followers were removed from the database {self.get_name()}")
         return True
     
     @expose
-    def receive_uris(self, uris: set[str]) -> bool:
+    def receive_uris_ids(self, uris: dict[str, int]) -> bool:
         if not self._cn_check():
             return False
-        self._followers_uris = set(uris) # Necessary cast to set, otherwise the received data is a tuple
+        self._followers_uris = uris
         return True
 
     @expose
@@ -176,6 +189,14 @@ class DBRemote(DBInterface):
             f.write(decoded_data)
         self._db_local = DBLocal(self._db_path, self._password)
         return True
+    
+    @expose
+    def set_unique_id(self, id: int) -> bool:
+        try:
+            self.unique_id = id
+            return True
+        except AttributeError:
+            return False
     
     def print_message(self, message: str):
         self._ctx.print_message(message)
@@ -238,12 +259,26 @@ class DBRemote(DBInterface):
         except Exception:
             self.print_message(f"An error occured while trying to delete a group of database {self.get_name()}")
         return True
+    
+    @expose
+    @oneway
+    def leader_election(self) -> None:
+        pass
 
     def answer_notification(self, vote: bool, notification: Notification) -> bool:
         if time() > notification.timestamp:
             return False
         return self._leader.cast_vote(vote, self.uri, notification.proposition_id)
     
+    def leave_db(self) -> DBLocal:
+        try:
+            self._leader.leave_database()
+            self._leader._pyroRelease()
+        except (CommunicationError, NamingError):
+            self.print_message("Error when trying to communicate with the leader!")
+        
+        return self._db_local
+
     def _cn_check(self) -> bool:
         """Checks if the client that is making a call has a common name in the allowed list"""
         client_cn = self._get_caller_cn()

@@ -340,16 +340,18 @@ def close_db(ctx: ContextApp) -> None:
     elif isinstance(closed_db, DBExpose):
         # TODO check that the unregistration works
         # TODO add logic to inform the followers
+        local_db = closed_db.close_database()
         closed_db.unregister_object(ctx.daemon)
         ctx.unregister_uri(closed_db.get_name())
         ctx.unregister_ignored_service(closed_db.uri)
-        questionary.print(f"Closed exposed database: {closed_db.get_name()}")
+        ctx.replace_database(local_db.local_id, local_db)
+        questionary.print(f"Closed exposed database {closed_db.get_name()}")
     else:
-        # TODO close the connection
-        # Remember to close the connections with the proxies
+        local_db = closed_db.leave_db()
+        ctx.replace_database(local_db.local_id, local_db)
         ctx.unregister_ignored_service(closed_db.leader_uri)
         ctx.add_service_from_db_name(closed_db.get_name())
-        questionary.print(f"Closed remote database: {closed_db.get_name()}")
+        questionary.print(f"Closed remote database {closed_db.get_name()}")
 
 def list_available_dbs(ctx: ContextApp) -> None:
     lines = [[name.split(".")[0], info[1], info[2]] for name, info in ctx.get_services_information()]
@@ -412,7 +414,10 @@ def connect_database(ctx: ContextApp) -> None:
         confirmation = questionary.confirm(f"You selected '{selected_display_name}'. Is this correct?").ask()
         if not confirmation:
             continue
-        selected_uri = choices[selected_display_name][0]
+        selected_choice = choices.get(selected_display_name)
+        if not selected_choice:
+            continue
+        selected_uri = selected_choice[0]
         
         questions = [
                 {
