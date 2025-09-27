@@ -4,7 +4,7 @@ from threading import Lock
 from time import time, sleep
 from uuid import uuid4
 from Pyro5.server import Daemon, expose, oneway
-from Pyro5.errors import CommunicationError, NamingError
+from Pyro5.errors import CommunicationError, NamingError, PyroError
 from Pyro5.core import URI
 from Pyro5.api import Proxy, current_context
 from pykeepass import Entry, Group
@@ -150,12 +150,12 @@ class DBExpose(DBInterface):
                     try:
                         if not follower_proxy.add_uri(uri, unique_id, caller_cn):
                             has_failure = True
-                    except (CommunicationError, NamingError):
+                    except (CommunicationError, NamingError, PyroError):
                         dead_followers.add(follower_uri)
             
             self._followers_cleanup(dead_followers)
 
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             return (ReturnCode.ERROR, self._status)
             
         with self._followers_lock:
@@ -258,7 +258,7 @@ class DBExpose(DBInterface):
                         deadline = time() + 30
                         self._current_proposition["deadlines"][follower_uri] = deadline
                     follower_proxy.add_notification(notification_message, deadline, proposition_id)
-                except (CommunicationError, NamingError):
+                except (CommunicationError, NamingError, PyroError):
                     self.print_message(f"A follower was unreachable during a change proposition for database {self.get_name()}")
                 except Exception as e:
                     print(e)
@@ -285,7 +285,7 @@ class DBExpose(DBInterface):
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
                 try:
                     follower_proxy.remote_print_message(decision_message)
-                except (CommunicationError, NamingError):
+                except (CommunicationError, NamingError, PyroError):
                     pass
                 except Exception as e:
                     print(e)
@@ -319,7 +319,7 @@ class DBExpose(DBInterface):
                     try:
                         method = getattr(follower_proxy, follower_method)
                         method(data)
-                    except (CommunicationError, NamingError):
+                    except (CommunicationError, NamingError, PyroError):
                         dead_followers.add(follower_uri)
                     except AttributeError:
                         self.print_message("I tried to call a method that doesn't exist on the client")
@@ -391,7 +391,7 @@ class DBExpose(DBInterface):
                                                         # otherwise the follower is overwhelmed with connections and can't respond.
                     try:
                         follower_proxy.remove_uris(uri_set)
-                    except (CommunicationError, NamingError):
+                    except (CommunicationError, NamingError, PyroError):
                         dead_followers.add(follower_uri)
 
         self._followers_cleanup(dead_followers)
@@ -420,7 +420,7 @@ class DBExpose(DBInterface):
                         follower_proxy._pyroTimeout = 5.0
                         try:
                             follower_proxy.remove_uris(dead_followers)
-                        except (CommunicationError, NamingError):
+                        except (CommunicationError, NamingError, PyroError):
                             new_dead_followers.add(follower_uri)
 
             dead_followers = new_dead_followers
@@ -470,7 +470,7 @@ class DBExpose(DBInterface):
                 with Proxy(follower_uri) as proxy:
                     proxy._pyroTimeout = 5.0
                     proxy.start_election()
-            except (CommunicationError, NamingError):
+            except (CommunicationError, NamingError, PyroError):
                 continue
             except Exception as e:
                 print(e)

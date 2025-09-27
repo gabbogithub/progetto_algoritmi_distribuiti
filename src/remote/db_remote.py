@@ -116,7 +116,7 @@ class DBRemote(DBInterface):
             self._leader._pyroClaimOwnership()
             return_code, status_code = self._leader.propose_add_entry(destination_group, title, username, passwd, self.uri)
             return self._process_return_code(return_code, status_code)
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             self.print_message("Error when trying to communicate with the leader!")
             return False
 
@@ -127,7 +127,7 @@ class DBRemote(DBInterface):
             self._leader._pyroClaimOwnership()
             return_code, status_code = self._leader.propose_add_group(parent_group, group_name, self.uri)
             return self._process_return_code(return_code, status_code)
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             self.print_message("Error when trying to communicate with the leader!")
             return False
     
@@ -138,7 +138,7 @@ class DBRemote(DBInterface):
             self._leader._pyroClaimOwnership()
             return_code, status_code = self._leader.propose_delete_entry(entry_path, self.uri)
             return self._process_return_code(return_code, status_code)
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             self.print_message("Error when trying to communicate with the leader!")
             return False
     
@@ -149,7 +149,7 @@ class DBRemote(DBInterface):
             self._leader._pyroClaimOwnership()
             return_code, status_code = self._leader.propose_delete_group(path, self.uri)
             return self._process_return_code(return_code, status_code)
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             self.print_message("Error when trying to communicate with the leader!")
             return False
     
@@ -321,7 +321,6 @@ class DBRemote(DBInterface):
         dead_followers = set()
         while tries_number > 0:
             # Exclude followers with an ID lower than mine and that were unable to answer in the previous rounds.
-            print(self.unique_id)
             higher_follower_uris = [follower_uri for (follower_uri, follower_id) in self._followers_ids.items() if ((follower_uri not in dead_followers) and (follower_id > self.unique_id))]
             got_response = False
             for follower_uri in higher_follower_uris:
@@ -333,7 +332,7 @@ class DBRemote(DBInterface):
                         if follower_proxy.ping():
                             got_response = True
                         follower_proxy.start_election()
-                    except (CommunicationError, NamingError):
+                    except (CommunicationError, NamingError, PyroError):
                         dead_followers.add(follower_uri)
                     except Exception as e:
                         print(e)
@@ -376,7 +375,7 @@ class DBRemote(DBInterface):
                                 new_dead_followers.add(follower_uri)
                             if not follower_proxy.remove_uris(dead_followers):
                                 new_dead_followers.add(follower_uri)
-                        except (CommunicationError, NamingError):
+                        except (CommunicationError, NamingError, PyroError):
                             new_dead_followers.add(follower_uri)
                         except Exception as e:
                             print(e)
@@ -403,7 +402,7 @@ class DBRemote(DBInterface):
                             follower_proxy._pyroTimeout = 5.0
                             try:
                                 follower_proxy.remove_uris(dead_followers)
-                            except (CommunicationError, NamingError):
+                            except (CommunicationError, NamingError, PyroError):
                                 new_dead_followers.add(follower_uri)
 
                     dead_followers = new_dead_followers
@@ -413,7 +412,6 @@ class DBRemote(DBInterface):
                 expose_db._operation_lock.release()
                 self._ctx.register_ignored_service(expose_db.uri)
                 self._ctx.register_uri(expose_db.get_name(), expose_db.uri)
-                print(f"ID del expose_db: {expose_db.local_id}. ID del local db: {expose_db._db_local.local_id}. ID dal remote db: {self.local_id}")
                 try:
                     expose_db.local_id = self.local_id
                     expose_db._db_local.local_id = self.local_id
@@ -444,7 +442,7 @@ class DBRemote(DBInterface):
                 subject = dict(x[0] for x in cert["subject"])
                 self._leader_cn = subject.get("commonName")
                 return True
-            except (ConnectionError, NamingError):
+            except (ConnectionError, NamingError, PyroError):
                 return False
         return False
             
@@ -464,7 +462,7 @@ class DBRemote(DBInterface):
             self._leader._pyroClaimOwnership()
             self._leader.leave_database()
             self._leader._pyroRelease()
-        except (CommunicationError, NamingError):
+        except (CommunicationError, NamingError, PyroError):
             self.print_message("Error when trying to communicate with the leader!")
         
         return self._db_local
