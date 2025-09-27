@@ -20,14 +20,15 @@ class DBExpose(DBInterface):
         self._followers_cn = {} # followers Common Names
         self._followers_id = {} # followers IDs
         self._uri = None # leader URI
+        self._is_leader = True
         self._ctx = context
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._operation_lock = Lock()
         self._vote_lock = Lock()
         self._followers_lock = Lock()
+        self._leader_lock = Lock()
         self._current_proposition = None
         self._status = StatusCode.FREE
-        self._local_id = None
 
     @property
     def uri(self) -> str | None:
@@ -132,7 +133,8 @@ class DBExpose(DBInterface):
                 return (ReturnCode.ERROR, self._status)
             with self._followers_lock:
                 uris_ids_snapshot = self._followers_id.copy() # Because other threads might modify the dictionary while I iterate.
-            if not proxy.receive_uris_ids(uris_ids_snapshot):
+                uris_cns_snapshot = self._followers_cn.copy()
+            if not proxy.receive_uris(uris_ids_snapshot, uris_cns_snapshot):
                 return (ReturnCode.ERROR, self._status)
             if not proxy.set_unique_id(unique_id):
                 return (ReturnCode.ERROR, self._status)
@@ -146,14 +148,14 @@ class DBExpose(DBInterface):
                     follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
                                                       # otherwise the follower is overwhelmed with connections and can't respond.
                     try:
-                        if not follower_proxy.add_uri_id(uri, unique_id):
+                        if not follower_proxy.add_uri(uri, unique_id, caller_cn):
                             has_failure = True
-                    except (CommunicationError, NameError):
+                    except (CommunicationError, NamingError):
                         dead_followers.add(follower_uri)
             
             self._followers_cleanup(dead_followers)
 
-        except (CommunicationError, NameError):
+        except (CommunicationError, NamingError):
             return (ReturnCode.ERROR, self._status)
             
         with self._followers_lock:
@@ -256,7 +258,7 @@ class DBExpose(DBInterface):
                         deadline = time() + 30
                         self._current_proposition["deadlines"][follower_uri] = deadline
                     follower_proxy.add_notification(notification_message, deadline, proposition_id)
-                except (CommunicationError, NameError):
+                except (CommunicationError, NamingError):
                     self.print_message(f"A follower was unreachable during a change proposition for database {self.get_name()}")
                 except Exception as e:
                     print(e)
@@ -283,7 +285,7 @@ class DBExpose(DBInterface):
                                                   # otherwise the follower is overwhelmed with connections and can't respond.
                 try:
                     follower_proxy.remote_print_message(decision_message)
-                except (CommunicationError, NameError):
+                except (CommunicationError, NamingError):
                     pass
                 except Exception as e:
                     print(e)
@@ -317,7 +319,7 @@ class DBExpose(DBInterface):
                     try:
                         method = getattr(follower_proxy, follower_method)
                         method(data)
-                    except (CommunicationError, NameError):
+                    except (CommunicationError, NamingError):
                         dead_followers.add(follower_uri)
                     except AttributeError:
                         self.print_message("I tried to call a method that doesn't exist on the client")
@@ -385,11 +387,11 @@ class DBExpose(DBInterface):
             dead_followers = set()
             for follower_uri in self._followers_cn:
                 with Proxy(URI(follower_uri)) as follower_proxy:
-                    follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection, 
+                    follower_proxy._pyroTimeout = 5.0 # Wait at most 5 seconds to establish a connection,
                                                         # otherwise the follower is overwhelmed with connections and can't respond.
                     try:
                         follower_proxy.remove_uris(uri_set)
-                    except (CommunicationError, NameError):
+                    except (CommunicationError, NamingError):
                         dead_followers.add(follower_uri)
 
         self._followers_cleanup(dead_followers)
@@ -412,13 +414,15 @@ class DBExpose(DBInterface):
                 if removed:
                     self.print_message(f"Dead followers were removed from database {self.get_name()}")
 
-            for follower_uri in self._followers_cn:
-                with Proxy(URI(follower_uri)) as follower_proxy:
-                    follower_proxy._pyroTimeout = 5.0
-                    try:
-                        follower_proxy.remove_uris(dead_followers)
-                    except (CommunicationError, NameError):
-                        new_dead_followers.add(follower_uri)
+                uris_snapshot = list(self._followers_cn.keys())
+            for follower_uri in uris_snapshot:
+                    with Proxy(URI(follower_uri)) as follower_proxy:
+                        follower_proxy._pyroTimeout = 5.0
+                        try:
+                            follower_proxy.remove_uris(dead_followers)
+                        except (CommunicationError, NamingError):
+                            new_dead_followers.add(follower_uri)
+
             dead_followers = new_dead_followers
 
     def _cn_check(self) -> bool:
@@ -450,8 +454,15 @@ class DBExpose(DBInterface):
             self._current_proposition["votes"].append(vote)
         return True
     
+    @expose
+    def ping(self) -> bool:
+        with self._leader_lock:
+            return self._is_leader
+    
     def close_database(self) -> DBLocal:
         self.print_message("I'm notifying the followers of your decision")
+        with self._leader_lock:
+            self._is_leader = False
         with self._followers_lock:
             uris_snapshot = list(self._followers_cn.keys())
         for follower_uri in uris_snapshot:
@@ -459,6 +470,8 @@ class DBExpose(DBInterface):
                 with Proxy(follower_uri) as proxy:
                     proxy._pyroTimeout = 5.0
                     proxy.start_election()
+            except (CommunicationError, NamingError):
+                continue
             except Exception as e:
                 print(e)
                 continue
@@ -486,8 +499,8 @@ class DBExpose(DBInterface):
     def print_message(self, message: str) -> None:
         self._ctx.print_message(message)
     
-    def unregister_object(self, daemon: Daemon) -> None:
-        daemon.unregister(self)
+    def unregister_object(self) -> None:
+        self._ctx.daemon.unregister(self)
     
     def get_name(self) -> str:
         return self._db_local.get_name()

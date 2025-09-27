@@ -326,11 +326,9 @@ def delete_entry(ctx: ContextApp) -> None:
     try:
         db.delete_entry(results["entry_path"].split("/"))
     except KeyError as e:
-        # TODO check that other errors may be raised, especially by remote dabatases.
         questionary.print(f"{e}", style="bold fg:red")
 
 def close_db(ctx: ContextApp) -> None:
-    # TODO add logic to handle the transition from online to offline database
     idx = database_selection(ctx)
     closed_db = ctx.remove_database(idx)
     if not closed_db:
@@ -338,16 +336,15 @@ def close_db(ctx: ContextApp) -> None:
     elif isinstance(closed_db, DBLocal):
         questionary.print(f"Closed local database: {closed_db.get_name()}")
     elif isinstance(closed_db, DBExpose):
-        # TODO check that the unregistration works
-        # TODO add logic to inform the followers
         local_db = closed_db.close_database()
-        closed_db.unregister_object(ctx.daemon)
+        closed_db.unregister_object()
         ctx.unregister_uri(closed_db.get_name())
         ctx.unregister_ignored_service(closed_db.uri)
         ctx.replace_database(local_db.local_id, local_db)
         questionary.print(f"Closed exposed database {closed_db.get_name()}")
     else:
         local_db = closed_db.leave_db()
+        ctx.daemon.unregister(closed_db)
         ctx.replace_database(local_db.local_id, local_db)
         ctx.unregister_ignored_service(closed_db.leader_uri)
         ctx.add_service_from_db_name(closed_db.get_name())
