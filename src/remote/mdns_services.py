@@ -1,7 +1,6 @@
 from collections.abc import ItemsView
 import socket
-from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
-import time
+from zeroconf import Zeroconf, ServiceInfo
 
 SERVICE_TYPE = "_uri._tcp.local."
 

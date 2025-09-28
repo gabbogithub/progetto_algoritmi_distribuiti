@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from time import time, sleep
 from uuid import uuid4
-from Pyro5.server import Daemon, expose, oneway
+from Pyro5.server import expose, oneway
 from Pyro5.errors import CommunicationError, NamingError, PyroError
 from Pyro5.core import URI
 from Pyro5.api import Proxy, current_context

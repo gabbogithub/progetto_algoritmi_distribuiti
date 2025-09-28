@@ -1,14 +1,10 @@
-from time import time
 from pykeepass.exceptions import CredentialsError
-from Pyro5.api import URI
-from Pyro5.errors import CommunicationError, NamingError
 import questionary
 from questionary import prompt, ValidationError, Validator, Choice
 from prettytable import PrettyTable, TableStyle
 from pathlib import Path
 from itertools import zip_longest
 from database.db_local import DBLocal
-from database.db_interface import DBInterface
 from remote.db_expose import DBExpose
 from remote.db_remote import DBRemote
 from context.context import ContextApp

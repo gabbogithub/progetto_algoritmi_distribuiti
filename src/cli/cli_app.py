@@ -3,8 +3,6 @@ from collections import defaultdict
 from context.context import ContextApp
 import questionary
 from . import actions
-import threading
-from time import sleep
 
 class CLIApp():
 

@@ -4,7 +4,7 @@ from time import sleep
 from base64 import b64decode
 from time import time, sleep
 from Pyro5.core import URI
-from Pyro5.server import Daemon, expose, oneway
+from Pyro5.server import expose, oneway
 from Pyro5.api import Proxy, current_context
 from Pyro5.errors import CommunicationError, NamingError, PyroError
 from pykeepass import Entry, Group
