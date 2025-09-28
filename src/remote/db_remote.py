@@ -297,7 +297,6 @@ class DBRemote(DBInterface):
                     self._leader._pyroClaimOwnership()
                     self._leader._pyroTimeout = 5.0
                     if self._leader.ping():
-                        print(5)
                         self._leader._pyroTimeout = None
                         return
                 except (CommunicationError, NamingError, PyroError):

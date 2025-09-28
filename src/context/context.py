@@ -7,7 +7,6 @@ from questionary import print
 from database.db_interface import DBInterface
 from remote.mdns_services import ContinuousListener, UriAdvertiser, SERVICE_TYPE
 from remote.remote_data_structures import Notification, NotificationQueue
-import time
 
 class ContextApp():
     """Context class that holds essential values used by different compontents
